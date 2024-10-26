@@ -1,0 +1,146 @@
+"""
+This module provides classes for representing events and iterations of event detection and baseline determination
+in (nano)electrochemical time series data.
+"""
+
+from dataclasses import dataclass
+from numpy import ndarray
+
+
+@dataclass
+class Events:
+    """
+    A class to represent a collection of events, used for the GUI.
+
+    Attributes:
+        label (str): The label for the events.
+        events (list[dict]): A list of event dictionaries. Default is None.
+    """
+
+    label: str
+    events: list[dict] = None
+
+    def __iter__(self):
+        """
+        Iterate through the event dictionaries in the object.
+
+        Yields:
+            dict: An event dictionary.
+        """
+
+        if not self.events:
+            return
+        for i in self.events:
+            yield i
+
+    def __len__(self):
+        """
+        Get the number of events.
+
+        Returns:
+            int: The number of events.
+        """
+
+        if self.events:
+            return len(self.events)
+        return 0
+
+    def add(self, event: dict):
+        """
+        Add an event dictionary to the events list.
+
+        Args:
+            event (dict): The event dictionary to add.
+        """
+
+        if self.events:
+            self.events += [event]
+        else:
+            self.events = [event]
+
+    def get(self, event_id: int):
+        """
+        Get an event dictionary by its ID.
+
+        Args:
+            event_id (int): The ID of the event dictionary to retrieve.
+
+        Returns:
+            dict: The event dictionary with the specified ID.
+        """
+
+        if not self.events:
+            return
+        return [event for event in self if event['ID'] == event_id][0]
+
+    def get_feature(self, key: str):
+        """
+        Get a feature from all event dictionaries.
+
+        Args:
+            key (str): The key of the feature to retrieve.
+
+        Returns:
+            list: A list of feature values.
+        """
+
+        if not self.events:
+            return
+        return [i[key] for i in self]
+
+    def add_feature(self, key: str, value: ndarray):
+        """
+        Add a feature to all event dictionaries.
+
+        Args:
+            key (str): The key of the feature to add.
+            value (ndarray): The values of the feature to add.
+        """
+
+        if not self.events or len(self) != len(value):
+            return
+        for i, event in enumerate(self):
+            event[key] = value[i]
+
+    def add_features(self, features: dict):
+        """
+        Add multiple features to all event dictionaries.
+
+        Args:
+            features (dict): A dictionary of features to add.
+        """
+
+        for key, value in features.items():
+            self.add_feature(key, value)
+
+
+@dataclass
+class Iteration:
+    """
+    A dataclass to represent an iteration of event detection and baseline determination.
+
+    Attributes:
+        label (str): The label for the iteration.
+        args (dict): The arguments used in the iteration.
+        trace (ndarray, optional): The input signal trace. Default is None.
+        filtered_trace (ndarray): The filtered version of the input trace. Default is None.
+        baseline (ndarray): The baseline of the trace. Default is None.
+        threshold (ndarray): The threshold for event detection. Default is None.
+        calculation_trace (ndarray): The trace used for calculations. Default is None.
+        trace_stats (dict): Statistics for the trace. Default is None.
+        event_coordinates (ndarray): The coordinates of detected events. Default is None.
+        event_stats (dict): Statistics for the detected events. Default is None.
+        events (Events): The events detected in the iteration. Default is None.
+    """
+
+    label: str
+    args: dict
+    trace: ndarray = None
+    filtered_trace: ndarray = None
+    baseline: ndarray = None
+    threshold: ndarray = None
+    calculation_trace: ndarray = None
+    trace_stats: dict = None
+    event_coordinates: ndarray = None
+    event_stats: dict = None
+    events: Events = None
