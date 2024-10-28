@@ -5,6 +5,7 @@ data.
 
 from stochastic.processes.noise import FractionalGaussianNoise as Fgn
 from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
+from stochastic.processes.noise import VioletNoise as Vn
 from numpy import mean, std, zeros, arange, sqrt
 from numpy.random import default_rng
 from scipy.signal import get_window
@@ -100,7 +101,7 @@ def simulate_regime(alpha: float, sigma: float, length: int):
     Simulate a single noise regime.
 
     Args:
-        alpha (float): The alpha parameter for the noise, H = alpha for fGn and H = alpha - 1 for fBm.
+        alpha (float): The alpha parameter for the noise, alpha = -0.5 is the special capacitive noise case.
         sigma (float): The standard deviation of the noise.
         length (int): The length of the noise regime.
 
@@ -108,12 +109,17 @@ def simulate_regime(alpha: float, sigma: float, length: int):
         ndarray: The simulated noise regime.
     """
 
-    if alpha > 1:
+    if 1 < alpha <= 2:  # fBm
         regime = Fbm(hurst=alpha - 1, t=length)
         regime = regime.sample(length - 1)
-    else:
+    elif 0 < alpha <= 1:  # fGn
         regime = Fgn(hurst=alpha, t=length)
         regime = regime.sample(length)
+    elif alpha == -0.5:  # Capacitive noise
+        regime = Vn(t=length)
+        regime = regime.sample(length)
+    else:
+        raise ValueError("Alpha must be greater than 0 for fGn, greater than 1 for fBm or -0.5 for capacitive noise.")
 
     # Rescale to get the desired standard deviation
     regime_mean = mean(regime)
@@ -131,15 +137,20 @@ def simulate_baseline(offset: float, change: float, baseline_type: str, length: 
     Args:
         offset (float): The initial offset of the baseline.
         change (float): The change in the baseline over time.
-        baseline_type (str): The type of baseline ('constant' or 'linear').
+        baseline_type (str): The type of baseline ('constant', 'cottrell' or 'linear').
         length (int): The length of the baseline.
 
     Returns:
         list: The simulated baseline.
     """
 
+    time_vector = arange(0, length)
+    baseline = zeros(length)
     if baseline_type == 'constant':
         baseline = [offset] * length
+    elif baseline_type == 'cottrell':
+        baseline[0] = offset
+        baseline[1:] = offset + (change / sqrt(time_vector[1:]))
     else:
         change = change / length
         baseline = [offset + i * change for i in range(length)]
@@ -165,7 +176,7 @@ def simulate_events(
         amplitude_std (float): The standard deviation of the event amplitudes.
         duration (float): The mean duration of the events in milliseconds.
         duration_std (float): The standard deviation of the event durations in milliseconds.
-        window (str): The window function to use for the event shape.
+        window (str): The window function to use for the event shape, 'mixed' for different types.
         direction (str): The direction of the events ('up' or 'down').
         event_number (int): The number of events to simulate.
         sample_rate (int): The sample rate of the trace.
@@ -184,7 +195,11 @@ def simulate_events(
 
     # Generate the events
     events = []
+    windows = ['boxcar', 'triang', 'blackman', 'hamming', 'hann', 'bartlett', 'flattop', 'parzen', 'bohman',
+               'blackmanharris', 'nuttall', 'barthann', 'cosine', 'exponential', 'tukey', 'taylor', 'lanczos']
     for i in range(event_number):
+        if window == 'mixed':
+            window = windows[rng.integers(0, len(windows))]
         event_vector = get_window(window, int(durations[i]))
         event_vector = amplitudes[i] * event_vector * (-1 if direction == 'down' else 1)
         events.append({
