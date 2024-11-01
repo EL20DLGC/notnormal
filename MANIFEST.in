@@ -1,2 +1,3 @@
 include LICENSE
+include version.py
 recursive-include notnormal *.py
