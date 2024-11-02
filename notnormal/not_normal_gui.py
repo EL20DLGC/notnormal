@@ -51,6 +51,8 @@ class NotNormalGUI(tk.Tk):
 
         # Title
         self.title("Not Normal")
+        # Loose focus pls
+        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
         # Icon
         if hasattr(sys, '_MEIPASS'):
             self.image = os.path.join(sys._MEIPASS, 'data', 'landing_page.png')
@@ -837,7 +839,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['reset'].grid(row=0, column=0, sticky="nsew", padx=PADDING, pady=PADDING)
         self.windows['analysis_view_options'].columnconfigure(1, weight=1)
         self.widgets['analysis_view']['general'].grid(row=0, column=1, sticky="nsew", padx=0, pady=PADDING)
-        self.windows['analysis_view_options'].columnconfigure(2, weight=2)
+        self.windows['analysis_view_options'].columnconfigure(2, weight=1)
         self.widgets['analysis_view']['lines'].grid(row=0, column=2, sticky="nsew", padx=PADDING, pady=PADDING)
         # Reset layout
         self.widgets['analysis_view']['reset'].columnconfigure(0, weight=1, uniform='options')
@@ -1596,8 +1598,9 @@ class NotNormalGUI(tk.Tk):
             self.figure_options['x_limit_upper'].set(self.default_figure_options['x_limit_upper'])
         else:
             self.figure_options['x_limit_lower'].set(self.time_vector[0])
-            self.figure_options['x_limit_upper'].set(self.time_vector[1000000 if
-                                                     len(self.time_vector) > 1000000 else -1])
+            # self.figure_options['x_limit_upper'].set(self.time_vector[1000000 if
+            #                                          len(self.time_vector) > 1000000 else -1])
+            self.figure_options['x_limit_upper'].set(self.time_vector[-1])
 
     def flash_entry(self, entry):
         current = entry.cget('style')
@@ -1899,3 +1902,4 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     app = NotNormalGUI()
     app.mainloop()
+    app.quit()
