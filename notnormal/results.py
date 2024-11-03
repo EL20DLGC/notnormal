@@ -3,6 +3,7 @@ This module provides classes for representing events and iterations of event det
 in (nano)electrochemical time series data.
 """
 
+from typing import Optional
 from dataclasses import dataclass
 from numpy import ndarray
 
@@ -18,7 +19,7 @@ class Events:
     """
 
     label: str
-    events: list[dict] = None
+    events: Optional[list[dict]] = None
 
     def __iter__(self):
         """
@@ -135,12 +136,12 @@ class Iteration:
 
     label: str
     args: dict
-    trace: ndarray = None
-    filtered_trace: ndarray = None
-    baseline: ndarray = None
-    threshold: ndarray = None
-    calculation_trace: ndarray = None
-    trace_stats: dict = None
-    event_coordinates: ndarray = None
-    event_stats: dict = None
-    events: Events = None
+    trace: Optional[ndarray] = None
+    filtered_trace: Optional[ndarray] = None
+    baseline: Optional[ndarray] = None
+    threshold: Optional[ndarray] = None
+    calculation_trace: Optional[ndarray] = None
+    trace_stats: Optional[dict] = None
+    event_coordinates: Optional[ndarray] = None
+    event_stats: Optional[dict] = None
+    events: Optional[Events] = None

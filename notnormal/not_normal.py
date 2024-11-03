@@ -4,6 +4,7 @@ data. It includes a method of estimating the cutoff frequency and event directio
 thresholding method and a simple extraction method.
 """
 
+from typing import Optional
 from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil
 from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, append
 from scipy.signal import oaconvolve
@@ -24,7 +25,7 @@ def not_normal(
     replace_factor: int = 8,
     replace_gap: int = 2,
     threshold_window: float = 2.0,
-    z_score: float = None,
+    z_score: Optional[float] = None,
     vector_results: bool = False,
     parallel: bool = False
 ) -> tuple:
@@ -98,7 +99,7 @@ def parallel_iterate(
     threshold_window: float,
     z_score: float,
     vector_results: bool = False,
-    segment_size: int = None
+    segment_size: Optional[int] = None
 ):
     """
     Parallel equivalent to the iterate function.
@@ -125,7 +126,7 @@ def parallel_iterate(
                 threshold_window=threshold_window, z_score=z_score, vector_results=vector_results)
 
     # Default to the same size as the confirmed stopping criterion accuracy or threshold accuracy, whichever is larger
-    minimum_segment = max([200000, int(sample_rate * threshold_window)])
+    minimum_segment = int(max([200000, int(sample_rate * threshold_window)]))
     if segment_size is None or segment_size < minimum_segment:
         segment_size = minimum_segment
     if segment_size > len(trace):
@@ -230,7 +231,7 @@ def iterate(
         results.append(Iteration(label=f'Iteration {i}', args=args, trace=trace, filtered_trace=filtered_trace))
         # Baseline and threshold on the calculation trace
         baseline = baseline_filter(calculation_trace, cutoff, sample_rate)
-        threshold = thresholder(calculation_trace, baseline, z_score, (threshold_window * sample_rate),
+        threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate),
                                 results[-2].event_coordinates if i > 1 else None)
 
         # Calculate trace statistics
@@ -265,7 +266,7 @@ def iterate(
         i += 1
 
     # Final compute threshold using std as it is more accurate when outliers are no longer present
-    threshold = thresholder(calculation_trace, baseline, z_score, (threshold_window * sample_rate),
+    threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate),
                             results[-1].event_coordinates, method='std')
     # Store the final vectors
     results.append(Iteration(label='Final', args=args, trace=trace, filtered_trace=filtered_trace, baseline=baseline,
@@ -322,7 +323,7 @@ def initial_estimate(
 
     # Initial baseline and threshold
     results.baseline = baseline_filter(trace, cutoff, sample_rate)
-    results.threshold = thresholder(trace, results.baseline, z_score, (threshold_window * sample_rate))
+    results.threshold = thresholder(trace, results.baseline, z_score, int(threshold_window * sample_rate))
 
     # Calculate trace statistics
     results.trace_stats = trace_statistics(trace, results.baseline)
@@ -356,7 +357,7 @@ def expected_outliers(
         threshold: ndarray,
         event_coordinates: ndarray,
         z_score: float
-) -> int:
+) -> tuple:
     """
     Calculate the expected number of false positives and significant events based on the chosen Z-score and the event
     profiles. Essentially, we can remove all event samples from the calculation if they exceed the maximium expected
@@ -448,7 +449,7 @@ def event_statistics(event_coordinates: ndarray) -> dict:
     return results
 
 
-def trace_statistics(trace: ndarray, baseline: ndarray, event_coordinates: ndarray = None) -> dict:
+def trace_statistics(trace: ndarray, baseline: ndarray, event_coordinates: Optional[ndarray] = None) -> dict:
     """
     Calculate statistics for the trace.
 
@@ -657,7 +658,6 @@ def locate_events(
     return event_coordinates
 
 
-@njit
 def event_bounds(threshold_idxs: ndarray, baseline_idxs: ndarray) -> ndarray:
     """
     Determine the bounds of events based on threshold and baseline crossing indices.
@@ -759,8 +759,8 @@ def thresholder(
         trace: ndarray,
         baseline: ndarray,
         z_score: float,
-        window: int = None,
-        event_coordinates: ndarray = None,
+        window: Optional[int] = None,
+        event_coordinates: Optional[ndarray] = None,
         method: str = 'iqr'
 ) -> ndarray:
     """
@@ -800,15 +800,14 @@ def thresholder(
         if len(current_segment) == 0:
             current_segment = adjusted[start:end]
 
-        match method:
-            case 'iqr':
-                # doi:10.1186/1471-2288-14-135
-                q1 = quantile(current_segment, 0.25)
-                q3 = quantile(current_segment, 0.75)
-                n = len(current_segment)
-                standard_deviation[start:end] = (q3 - q1) / (2 * norm.ppf((0.75 * n - 0.125) / (n + 0.25)))
-            case 'std':
-                standard_deviation[start:end] = std(current_segment)
+        if method == 'iqr':
+            # doi:10.1186/1471-2288-14-135
+            q1 = quantile(current_segment, 0.25)
+            q3 = quantile(current_segment, 0.75)
+            n = len(current_segment)
+            standard_deviation[start:end] = (q3 - q1) / (2 * norm.ppf((0.75 * n - 0.125) / (n + 0.25)))
+        else:
+            standard_deviation[start:end] = std(current_segment)
 
     return standard_deviation * z_score
 

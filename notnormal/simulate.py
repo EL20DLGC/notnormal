@@ -3,6 +3,7 @@ This module provides functions to simulate traces with noise, baseline, and even
 data.
 """
 
+from typing import Optional
 from stochastic.processes.noise import FractionalGaussianNoise as Fgn
 from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
 from stochastic.processes.noise import VioletNoise as Vn
@@ -14,9 +15,9 @@ from scipy.signal import get_window
 def simulate_trace(
     length: int,
     sample_rate: int,
-    noise_dict: dict = None,
-    baseline_dict: dict = None,
-    event_dicts: list[dict] = None,
+    noise_dict: Optional[dict] = None,
+    baseline_dict: Optional[dict] = None,
+    event_dicts: Optional[list[dict]] = None,
 ):
     """
     Simulate a trace with noise, baseline, and events.

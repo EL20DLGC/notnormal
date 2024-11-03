@@ -39,3 +39,6 @@ The  [*simulate*](./docs/notnormal/simulate.html)  module is a WIP and will simu
 
 **Q.** Do we not require a lower Z-score for the estimate because of the event influence? \
 **A.** No, the improved estimate is so accurate in the presence of outliers, it blew my socks off. So, we only need one Z-score for both estimation and iteration.
+
+**Q.** What does the estimate accomplish? \
+**A.** The estimate will determine the cutoff for iteration and the direction of the events. Note, the direction is the starting point for iteration and will not be the final result. The final result *always* extracts biphasically. If you do not want events from a specific side, they are conveniently labelled in the results CSV.

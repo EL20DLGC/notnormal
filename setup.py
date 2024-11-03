@@ -1,5 +1,6 @@
 import os.path
 from setuptools import find_packages, setup
+from Cython.Build import cythonize
 
 
 def read(rel_path: str) -> str:
@@ -25,7 +26,8 @@ setup(
     version=get_version("version.py"),
     author="el20dlgc",
     author_email="el20dlgc@leeds.ac.uk",
-    description="Anomaly detection and baseline determination for (nano)electrochemical time series data",
+    description="This package revolves around the NotNormal algorithm, which combines estimation and iteration to "
+                "automatically extract events from (nano)electrochemical time series data.",
     long_description=long_description,
     packages=find_packages(),
     install_requires=[
@@ -37,7 +39,8 @@ setup(
         "matplotlib",
         "pyabf",
         "pandas",
-        "Pillow"
+        "Pillow",
+        "Cython"
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',
@@ -46,4 +49,6 @@ setup(
     ],
     include_package_data=True,
     package_data={'': ['data/*']},
+    ext_modules=cythonize("notnormal/not_normal.py", compiler_directives={'language_level': 3},
+                          show_all_warnings=True, annotate=True),
 )

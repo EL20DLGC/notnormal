@@ -1,4 +1,5 @@
 import csv
+import traceback
 import multiprocessing
 import os.path
 import queue
@@ -346,7 +347,7 @@ class NotNormalGUI(tk.Tk):
             to=13,
             increment=1,
             textvariable=self.analysis_options['bounds_filter'],
-            format='%2.0f',
+            format='%d',
             width=ENTRY_WIDTH,
             justify='center'
         )
@@ -451,7 +452,7 @@ class NotNormalGUI(tk.Tk):
             to=16,
             increment=1,
             textvariable=self.analysis_options['replace_factor'],
-            format='%2.0f',
+            format='%d',
             width=ENTRY_WIDTH,
             justify='center'
         )
@@ -467,7 +468,7 @@ class NotNormalGUI(tk.Tk):
             to=4,
             increment=1,
             textvariable=self.analysis_options['replace_gap'],
-            format='%2.0f',
+            format='%d',
             width=ENTRY_WIDTH,
             justify='center'
         )
@@ -1651,10 +1652,10 @@ class NotNormalGUI(tk.Tk):
 
         # Extract features
         events = Events(label)
-        events.events = nn.simple_extractor(self.trace, self.baseline, self.event_coordinates, 1 / self.time_step)
+        events.events = nn.simple_extractor(self.trace, self.baseline, self.event_coordinates, int(1 / self.time_step))
         # Store maximum cutoff
         max_cutoffs = nn.calculate_cutoffs(self.trace, self.baseline, self.threshold, self.event_coordinates,
-                                           1 / self.time_step)
+                                           int(1 / self.time_step))
         events.add_feature('Max Cutoff', max_cutoffs)
         self.analysis_results[label].events = events
         # Update the cutoff estimate window
@@ -1743,6 +1744,7 @@ class NotNormalGUI(tk.Tk):
             try:
                 results.put(nn.initial_estimate(*args)[2])
             except Exception as e:
+                errors.put(traceback.format_exc())
                 errors.put(e)
                 return
 
@@ -1756,7 +1758,7 @@ class NotNormalGUI(tk.Tk):
                 errors,
                 self.trace,
                 self.filtered_trace,
-                1 / self.time_step,
+                int(1 / self.time_step),
                 self.analysis_options['estimate_cutoff'].get(),
                 self.analysis_options['threshold_window'].get(),
                 self.analysis_options['z_score'].get(),
@@ -1808,6 +1810,7 @@ class NotNormalGUI(tk.Tk):
                 else:
                     results.put(nn.iterate(*args)[2])
             except Exception as e:
+                errors.put(traceback.format_exc())
                 errors.put(e)
                 return
 
@@ -1821,7 +1824,7 @@ class NotNormalGUI(tk.Tk):
                 errors,
                 self.trace,
                 self.filtered_trace,
-                1 / self.time_step,
+                int(1 / self.time_step),
                 self.analysis_options['cutoff'].get(),
                 self.analysis_options['event_direction'].get(),
                 self.analysis_options['replace_factor'].get(),
