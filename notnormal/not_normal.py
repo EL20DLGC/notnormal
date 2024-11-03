@@ -1,3 +1,5 @@
+# cython: infer_types=True
+
 """
 This module provides functions for anomaly detection and baseline determination in (nano)electrochemical time series
 data. It includes a method of estimating the cutoff frequency and event direction, an improved iterative method,
@@ -6,15 +8,17 @@ thresholding method and a simple extraction method.
 
 from typing import Optional
 from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil
-from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, append
+from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, append, double, int32, int64
 from scipy.signal import oaconvolve
 from scipy.ndimage import median_filter
 from scipy.stats import norm, shapiro
-from numba import njit
 from functools import partial
 from multiprocessing import Pool, cpu_count
 from notnormal.results import Iteration
 from warnings import catch_warnings, simplefilter, filterwarnings
+import cython
+
+DTYPE = double
 
 
 def not_normal(
@@ -658,7 +662,7 @@ def locate_events(
     return event_coordinates
 
 
-def event_bounds(threshold_idxs: ndarray, baseline_idxs: ndarray) -> ndarray:
+def event_bounds(threshold_idxs: cython.longlong[:], baseline_idxs: cython.long[:]) -> ndarray:
     """
     Determine the bounds of events based on threshold and baseline crossing indices.
 
@@ -670,7 +674,10 @@ def event_bounds(threshold_idxs: ndarray, baseline_idxs: ndarray) -> ndarray:
         ndarray: The coordinates of detected events.
     """
 
-    spike_end = 0
+    spike_start: cython.longlong
+    spike_end: cython.longlong = 0
+    i: cython.longlong
+    baseline_idxs_length: cython.Py_ssize_t = len(baseline_idxs)
     event_coordinates = []
     # Iterate through the threshold crossing indices
     for i in range(len(threshold_idxs)):
@@ -688,16 +695,16 @@ def event_bounds(threshold_idxs: ndarray, baseline_idxs: ndarray) -> ndarray:
             spike_end += 1
 
         # If the end was already passed the cutoff sample
-        if spike_end > len(baseline_idxs) - 2:
-            spike_end = len(baseline_idxs) - 2
+        if spike_end > baseline_idxs_length - 2:
+            spike_end = baseline_idxs_length - 2
 
         # This is the OTHER side of the baseline to the event, on both start/end
         event_coordinates.append((spike_start, spike_end + 1))
 
-    return asarray(event_coordinates)
+    return asarray(event_coordinates, dtype=int64)
 
 
-def baseline_filter(trace: ndarray, cutoff: float, sample_rate: int) -> ndarray:
+def baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.int) -> ndarray:
     """
     Apply a baseline filter to the trace using a boxcar filter (moving average). This is a low-pass filter, the result
     is to be subtracted which is then a high-pass filter.
@@ -712,6 +719,7 @@ def baseline_filter(trace: ndarray, cutoff: float, sample_rate: int) -> ndarray:
     """
 
     # Cutoff to boxcar length conversion (odd length)
+    length: cython.long
     length = int(round(sqrt(0.196202 + ((cutoff * (1 / sample_rate)) ** 2)) / (cutoff * (1 / sample_rate))))
     length = length if length % 2 == 1 else length + 1
     # Pointless
@@ -721,11 +729,13 @@ def baseline_filter(trace: ndarray, cutoff: float, sample_rate: int) -> ndarray:
     if length >= len(trace):
         length = len(trace) - 1
     # Odd length window
-    window = ones(length) / length
+    window = ones(length, dtype=DTYPE) / length
     # Add fit for the edge cases
-    padded_trace = concatenate((trace[:int(length // 2)][::-1], trace, trace[-int(length // 2):][::-1]))
+    trace_view: cython.double[:] = trace
+    padded_trace = concatenate((trace_view[:int(length // 2)][::-1], trace_view, trace_view[-int(length // 2):][::-1]))
+    padded_trace_view: cython.double[:] = padded_trace
     # Calculate the moving average
-    baseline = oaconvolve(padded_trace, window, 'same')
+    baseline = oaconvolve(padded_trace_view, window, 'same')
     # Cut off the edges
     baseline = baseline[int(length // 2):-int(length // 2)]
 
@@ -744,11 +754,14 @@ def baseline_crosses(trace: ndarray, baseline: ndarray) -> ndarray:
         ndarray: Indices where the trace crosses the baseline, this is a masked version of the trace.
     """
 
+    assert trace.shape == baseline.shape
+    assert trace.dtype == baseline.dtype == DTYPE
+
     # Baseline adjust the trace
     adjusted = trace - baseline
     # Sign the trace then difference to find zero crossings
     # Zero crossing indices are marked by 1, 0 otherwise
-    zero_trace = zeros(len(trace))
+    zero_trace = zeros(trace.shape, dtype=int32)
     baseline_cross = where(diff(sign(adjusted)))[0]
     zero_trace[baseline_cross] = 1
 
@@ -758,9 +771,9 @@ def baseline_crosses(trace: ndarray, baseline: ndarray) -> ndarray:
 def thresholder(
         trace: ndarray,
         baseline: ndarray,
-        z_score: float,
-        window: Optional[int] = None,
-        event_coordinates: Optional[ndarray] = None,
+        z_score: cython.double,
+        window: Optional[int64] = None,
+        event_coordinates: Optional[cython.longlong[:, :]] = None,
         method: str = 'iqr'
 ) -> ndarray:
     """
@@ -771,7 +784,7 @@ def thresholder(
         trace (ndarray): The input signal trace.
         baseline (ndarray): The baseline of the trace.
         z_score (float): The Z-score for event detection.
-        window (int): The window size for threshold calculation. Default is None.
+        window (int): The window size in samples for threshold calculation. Default is None.
         event_coordinates (ndarray): The coordinates of detected events. Default is None.
         method (str): The method for threshold calculation ('iqr' or 'std'). Default is 'iqr'.
 
@@ -779,18 +792,38 @@ def thresholder(
         ndarray: The calculated threshold.
     """
 
-    # Masking events from the std calculation
-    event_mask = zeros(len(trace))
-    if event_coordinates is not None:
-        for event in event_coordinates:
-            event_mask[event[0]:event[1] + 1] = 1
+    assert trace.shape == baseline.shape
+    assert trace.dtype == baseline.dtype == DTYPE
+
     # Baseline adjust the trace
     adjusted = trace - baseline
+    adjusted_view: cython.double[:] = adjusted
+
+    # Masking events from the std calculation
+    event_id: cython.Py_ssize_t
+    event_number: cython.Py_ssize_t = event_coordinates.shape[0]
+    event_mask = zeros(trace.shape, dtype=int32)
+    event_mask_view: cython.long[:] = event_mask
+    if event_coordinates is not None:
+        for event_id in range(event_number):
+            event_mask_view[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1] = 1
+
     # Number of segments to divide the trace into
+    window: cython.longlong
+    segments: cython.long
     window = int(round(window)) if window is not None else len(trace)
     segments = len(trace) // window if len(trace) // window else 1
+
     # Calculate the threshold in segments
-    standard_deviation = zeros(len(trace))
+    i: cython.long
+    start: cython.longlong
+    end: cython.longlong
+    current_segment: ndarray
+    q1: cython.double
+    q3: cython.double
+    n: cython.longlong
+    standard_deviation = zeros(trace.shape, dtype=DTYPE)
+    standard_deviation_view: cython.double[:] = standard_deviation
     for i in range(segments):
         start = i * window
         end = (i + 1) * window if i != segments - 1 else len(trace)
@@ -798,21 +831,26 @@ def thresholder(
         # Baseline adjusted segment where events are masked
         current_segment = adjusted[start:end][where(event_mask[start:end] == 0)]
         if len(current_segment) == 0:
-            current_segment = adjusted[start:end]
+            current_segment = adjusted_view[start:end]
 
         if method == 'iqr':
             # doi:10.1186/1471-2288-14-135
             q1 = quantile(current_segment, 0.25)
             q3 = quantile(current_segment, 0.75)
             n = len(current_segment)
-            standard_deviation[start:end] = (q3 - q1) / (2 * norm.ppf((0.75 * n - 0.125) / (n + 0.25)))
+            standard_deviation_view[start:end] = (q3 - q1) / (2 * norm.ppf((0.75 * n - 0.125) / (n + 0.25)))
         else:
-            standard_deviation[start:end] = std(current_segment)
+            standard_deviation_view[start:end] = std(current_segment)
 
     return standard_deviation * z_score
 
 
-def threshold_crosses(trace: ndarray, baseline: ndarray, threshold: ndarray, event_direction: str) -> ndarray:
+def threshold_crosses(
+    trace: ndarray,
+    baseline: ndarray,
+    threshold: ndarray,
+    event_direction: str
+) -> ndarray:
     """
     Identify the indices where the trace crosses the threshold.
 
@@ -827,6 +865,9 @@ def threshold_crosses(trace: ndarray, baseline: ndarray, threshold: ndarray, eve
         to both the first and last crossing index.
     """
 
+    assert trace.shape == baseline.shape == threshold.shape
+    assert trace.dtype == baseline.dtype == threshold.dtype == DTYPE
+
     # Baseline adjust the trace
     adjusted = trace - baseline
 
@@ -835,6 +876,5 @@ def threshold_crosses(trace: ndarray, baseline: ndarray, threshold: ndarray, eve
     elif event_direction == 'down':
         return where(diff(sign(adjusted + threshold)) < 0)[0]
     else:
-        threshold_cross_down = where(diff(sign(adjusted + threshold)) < 0)[0]
-        threshold_cross_up = where(diff(sign(adjusted - threshold)) > 0)[0]
-        return sort(concatenate((threshold_cross_down, threshold_cross_up)))
+        return sort(concatenate((where(diff(sign(adjusted + threshold)) < 0)[0],
+                                 where(diff(sign(adjusted - threshold)) > 0)[0])))

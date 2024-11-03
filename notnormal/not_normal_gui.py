@@ -1,3 +1,5 @@
+# cython: infer_types=True
+
 import csv
 import traceback
 import multiprocessing
@@ -1691,8 +1693,8 @@ class NotNormalGUI(tk.Tk):
             # Axon binary format
             if path.endswith('.abf'):
                 data = pyabf.ABF(path)
-                trace = data.sweepY
-                time_vector = data.sweepX
+                trace = data.sweepY.astype(np.double)
+                time_vector = data.sweepX.astype(np.double)
             # Separated format
             elif path.endswith('.csv') or path.endswith('.tsv') or path.endswith('.txt') or path.endswith('.dat'):
                 data = pd.read_csv(path, sep=None, engine='python')

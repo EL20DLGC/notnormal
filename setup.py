@@ -49,6 +49,10 @@ setup(
     ],
     include_package_data=True,
     package_data={'': ['data/*']},
-    ext_modules=cythonize("notnormal/not_normal.py", compiler_directives={'language_level': 3},
-                          show_all_warnings=True, annotate=True),
+    ext_modules=cythonize(
+        ["notnormal/not_normal.py", "notnormal/not_normal_gui.py"],
+        compiler_directives={'language_level': 3},
+        show_all_warnings=True,
+        annotate=True
+    ),
 )
