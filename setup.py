@@ -1,5 +1,5 @@
 import os.path
-from setuptools import find_packages, setup
+from setuptools import find_packages, setup, Extension
 from Cython.Build import cythonize
 
 
@@ -50,9 +50,18 @@ setup(
     include_package_data=True,
     package_data={'': ['data/*']},
     ext_modules=cythonize(
-        ["notnormal/not_normal.py", "notnormal/not_normal_gui.py"],
-        compiler_directives={'language_level': 3},
+        [
+            Extension("notnormal.not_normal", ["notnormal/not_normal.py"],
+                      define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')]),
+            Extension("notnormal.not_normal_gui", ["notnormal/not_normal_gui.py"],
+                      define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')]),
+            Extension("notnormal.results", ["notnormal/results.py"],
+                      define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')])
+        ],
+        compiler_directives={
+            'language_level': 3,
+        },
         show_all_warnings=True,
-        annotate=True
-    ),
+        annotate=True,
+    )
 )

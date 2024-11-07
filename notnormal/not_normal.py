@@ -8,7 +8,7 @@ thresholding method and a simple extraction method.
 
 from typing import Optional
 from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil
-from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, append, double, int32, int64
+from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, double, int32, int64
 from scipy.signal import oaconvolve
 from scipy.ndimage import median_filter
 from scipy.stats import norm, shapiro
@@ -20,18 +20,28 @@ import cython
 
 DTYPE = double
 
+if cython.compiled:
+    COMPILED = True
+    print('Cython compiled')
+else:
+    COMPILED = False
+    print('Cython not compiled')
 
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def not_normal(
     trace: ndarray,
-    sample_rate: int = 100000,
-    bounds_window: int = 3,
-    estimate_cutoff: float = 10.0,
-    replace_factor: int = 8,
-    replace_gap: int = 2,
-    threshold_window: float = 2.0,
-    z_score: Optional[float] = None,
-    vector_results: bool = False,
-    parallel: bool = False
+    sample_rate: cython.int = 100000,
+    bounds_window: cython.int = 3,
+    estimate_cutoff: cython.double = 10.0,
+    replace_factor: cython.int = 8,
+    replace_gap: cython.int = 2,
+    threshold_window: cython.double = 2.0,
+    z_score: cython.double = None,
+    vector_results: cython.bint = False,
+    parallel: cython.bint = False
 ) -> tuple:
     """
     Anomaly detection and baseline determination for (nano)electrochemical time series data. This function combines the
@@ -92,18 +102,20 @@ def not_normal(
     return event_coordinates, baseline, dict(estimate=estimate_results, iteration=iteration_results)
 
 
+@cython.boundscheck(False)
+@cython.initializedcheck(False)
 def parallel_iterate(
     trace: ndarray,
     filtered_trace: ndarray,
-    sample_rate: int,
-    cutoff: float,
+    sample_rate: cython.int,
+    cutoff: cython.double,
     event_direction: str,
-    replace_factor: int,
-    replace_gap: int,
-    threshold_window: float,
-    z_score: float,
-    vector_results: bool = False,
-    segment_size: Optional[int] = None
+    replace_factor: cython.int,
+    replace_gap: cython.int,
+    threshold_window: cython.double,
+    z_score: cython.double,
+    vector_results: cython.bint = False,
+    segment_size: Optional[int64] = None
 ):
     """
     Parallel equivalent to the iterate function.
@@ -125,17 +137,19 @@ def parallel_iterate(
         tuple: A tuple containing event coordinates, baseline, and iteration results.
     """
 
+    assert trace.shape == filtered_trace.shape
+
     args = dict(trace=trace, filtered_trace=filtered_trace, sample_rate=sample_rate, cutoff=cutoff,
                 event_direction=event_direction, replace_factor=replace_factor, replace_gap=replace_gap,
                 threshold_window=threshold_window, z_score=z_score, vector_results=vector_results)
 
     # Default to the same size as the confirmed stopping criterion accuracy or threshold accuracy, whichever is larger
-    minimum_segment = int(max([200000, int(sample_rate * threshold_window)]))
+    minimum_segment: cython.longlong = int(max([200000, int(sample_rate * threshold_window)]))
     if segment_size is None or segment_size < minimum_segment:
         segment_size = minimum_segment
     if segment_size > len(trace):
         segment_size = len(trace)
-    splits = len(trace) // segment_size
+    splits: cython.int = len(trace) // segment_size
 
     # Not worth it to parallelize if the trace is too small
     if splits < 5:
@@ -160,50 +174,53 @@ def parallel_iterate(
     pool.join()
 
     # Reduce the results
-    iteration = results[0][-1][-1]
-    iteration.trace = trace
-    iteration.filtered_trace = filtered_trace
-    for i, result in enumerate(results[1:]):
-        # Sad numpy concatenation
-        if len(result[-1][-1].event_coordinates) > 0:
-            result[-1][-1].event_coordinates[:, 0] += len(iteration.baseline)
-            result[-1][-1].event_coordinates[:, 1] += len(iteration.baseline)
+    iteration = Iteration(label=f'Final', args=args, trace=trace, filtered_trace=filtered_trace)
+    baselines = []
+    thresholds = []
+    calculation_traces = []
+    event_coordinates = []
+    current_len: cython.size_t = 0
+    for result in results:
+        baselines.append(result[-1][-1].baseline)
+        thresholds.append(result[-1][-1].threshold)
+        calculation_traces.append(result[-1][-1].calculation_trace)
+        result[-1][-1].event_coordinates[:, 0] += current_len
+        result[-1][-1].event_coordinates[:, 1] += current_len
+        event_coordinates.append(result[-1][-1].event_coordinates)
+        current_len += len(result[-1][-1].baseline)
 
-            if len(iteration.event_coordinates) == 0:
-                iteration.event_coordinates = result[-1][-1].event_coordinates
-            else:
-                iteration.event_coordinates = concatenate((iteration.event_coordinates,
-                                                           result[-1][-1].event_coordinates))
-        iteration.baseline = append(iteration.baseline, result[-1][-1].baseline)
-        iteration.threshold = append(iteration.threshold, result[-1][-1].threshold)
-        iteration.calculation_trace = append(iteration.calculation_trace, result[-1][-1].calculation_trace)
-
+    iteration.baseline = concatenate(baselines)
+    iteration.threshold = concatenate(thresholds)
+    iteration.calculation_trace = concatenate(calculation_traces)
+    iteration.event_coordinates = concatenate(event_coordinates)
+    event_coordinates_view: cython.longlong[:, ::1] = iteration.event_coordinates
     # recompute event stats and trace stats
-    iteration.trace_stats = trace_statistics(iteration.calculation_trace, iteration.baseline,
-                                             iteration.event_coordinates)
-    iteration.event_stats = event_statistics(iteration.event_coordinates)
+    iteration.trace_stats = trace_statistics(iteration.calculation_trace, iteration.baseline, event_coordinates_view)
+    iteration.event_stats = event_statistics(event_coordinates_view)
     iteration.event_stats['Over Extractions'], iteration.event_stats['Significant Events'] = expected_outliers(
         trace,
         iteration.baseline,
         iteration.threshold,
-        iteration.event_coordinates,
+        event_coordinates_view,
         z_score
     )
 
     return iteration.event_coordinates, iteration.baseline, iteration
 
 
+@cython.boundscheck(False)
+@cython.initializedcheck(False)
 def iterate(
     trace: ndarray,
     filtered_trace: ndarray,
-    sample_rate: int,
-    cutoff: float,
+    sample_rate: cython.int,
+    cutoff: cython.double,
     event_direction: str,
-    replace_factor: int,
-    replace_gap: int,
-    threshold_window: float,
-    z_score: float,
-    vector_results: bool = False
+    replace_factor: cython.int,
+    replace_gap: cython.int,
+    threshold_window: cython.double,
+    z_score: cython.double,
+    vector_results: cython.bint = False
 ) -> ndarray:
     """
     Perform iterative anomaly detection and baseline determination on the trace.
@@ -224,13 +241,15 @@ def iterate(
         ndarray: An array containing event coordinates, baseline, and iteration results.
     """
 
+    assert trace.shape == filtered_trace.shape
+
     args = dict(sample_rate=sample_rate, cutoff=cutoff, event_direction=event_direction, replace_factor=replace_factor,
                 replace_gap=replace_gap, threshold_window=threshold_window, z_score=z_score)
     results = []
 
     # Iterate until the stopping criterion is met
     calculation_trace = trace.copy()
-    i = 1
+    i: cython.int = 1
     while True:
         results.append(Iteration(label=f'Iteration {i}', args=args, trace=trace, filtered_trace=filtered_trace))
         # Baseline and threshold on the calculation trace
@@ -292,13 +311,16 @@ def iterate(
     return results[-1].event_coordinates, baseline, results
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def initial_estimate(
         trace: ndarray,
         filtered_trace: ndarray,
-        sample_rate: int,
-        cutoff: float,
-        threshold_window: float,
-        z_score: float,
+        sample_rate: cython.int,
+        cutoff: cython.double,
+        threshold_window: cython.double,
+        z_score: cython.double,
 ) -> tuple:
     """
     Provides an initial estimate for the cutoff frequency and event direction for the iterate function.
@@ -317,6 +339,8 @@ def initial_estimate(
                 initial estimate.
     """
 
+    assert trace.shape == filtered_trace.shape
+
     results = Iteration(
         label='Estimate',
         args=dict(sample_rate=sample_rate, cutoff=cutoff, threshold_window=threshold_window, z_score=z_score),
@@ -326,7 +350,8 @@ def initial_estimate(
     )
 
     # Initial baseline and threshold
-    results.baseline = baseline_filter(trace, cutoff, sample_rate)
+    trace_view: cython.double[::1] = trace
+    results.baseline = baseline_filter(trace_view, cutoff, sample_rate)
     results.threshold = thresholder(trace, results.baseline, z_score, int(threshold_window * sample_rate))
 
     # Calculate trace statistics
@@ -341,10 +366,13 @@ def initial_estimate(
     results.event_stats = event_statistics(results.event_coordinates)
 
     # Calculate the required cutoffs
-    max_cutoffs = calculate_cutoffs(trace, results.baseline, results.threshold,
-                                    results.event_coordinates, sample_rate)
+    threshold_view: cython.double[::1] = results.threshold
+    coordinates_view: cython.longlong[:, ::1] = results.event_coordinates
+    max_cutoffs: cython.double[::1] = calculate_cutoffs(trace, results.baseline, threshold_view, coordinates_view,
+                                                        sample_rate)
 
     # Q1 of the required cutoffs, original needs to be added on top
+    calculated_cutoff: cython.double
     try:
         calculated_cutoff = percentile(max_cutoffs, 25) + cutoff
     except IndexError:
@@ -355,12 +383,15 @@ def initial_estimate(
     return results.event_stats['Max Cutoff'], results.event_direction, results
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def expected_outliers(
         trace: ndarray,
         baseline: ndarray,
         threshold: ndarray,
-        event_coordinates: ndarray,
-        z_score: float
+        event_coordinates:  cython.longlong[:, ::1],
+        z_score: cython.double
 ) -> tuple:
     """
     Calculate the expected number of false positives and significant events based on the chosen Z-score and the event
@@ -380,24 +411,37 @@ def expected_outliers(
         int: The number of false positives and significant events.
     """
 
+    assert trace.shape == baseline.shape == threshold.shape
+
     # Single outlier z_score expectation
-    max_z = norm.ppf(1 - ((1 / len(trace)) / 2))
-    max_threshold = (threshold / z_score) * max_z
+    max_z: cython.double = norm.ppf(1 - ((1 / len(trace)) / 2))
+    max_threshold: cython.double[::1] = (threshold / z_score) * max_z
     adjusted = trace - baseline
 
     # Expected number of extractions which are part of the baseline
-    total_length = 0
-    significant_events = 0
-    for x in event_coordinates:
-        if max(abs(adjusted[x[0]:x[1]])) > max_threshold[x[1]]:
-            total_length += x[1] - x[0] + 1
+    total_length: cython.size_t = 0
+    significant_events: cython.long = 0
+    event_id: cython.size_t
+    event_number: cython.size_t = len(event_coordinates)
+    for event_id in range(event_number):
+        if (max(abs(adjusted[event_coordinates[event_id, 0]:event_coordinates[event_id, 1]])) >
+                max_threshold[event_coordinates[event_id, 1]]):
+            total_length += event_coordinates[event_id, 1] - event_coordinates[event_id, 0] + 1
             significant_events += 1
 
-    false_positives = (2 * (1 - norm.cdf(z_score))) * (len(trace) - total_length)
+    false_positives: cython.double = (2 * (1 - norm.cdf(z_score))) * (len(trace) - total_length)
     return false_positives, significant_events
 
 
-def simple_extractor(trace: ndarray, baseline: ndarray, event_coordinates: ndarray, sample_rate: int) -> list:
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
+def simple_extractor(
+    trace: ndarray,
+    baseline: ndarray,
+    event_coordinates: cython.longlong[:, ::1],
+    sample_rate: cython.int
+) -> list:
     """
     Extract the events from the trace based on the event coordinates and the baseline. Then, simple features are
     calculated for each event.
@@ -412,25 +456,33 @@ def simple_extractor(trace: ndarray, baseline: ndarray, event_coordinates: ndarr
         list: A list of dictionaries containing event features.
     """
 
+    assert trace.shape == baseline.shape
+
     # Baseline adjust the trace
     adjusted = trace - baseline
+    event_id: cython.size_t
+    event_number: cython.size_t = len(event_coordinates)
     events = []
-    for i, event in enumerate(event_coordinates):
+    for event_id in range(event_number):
+        vector = adjusted[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1]
         events.append({
-            'ID': i + 1,
-            'Coordinates': event,
-            'Vector': adjusted[event[0]:event[1] + 1],
-            'Amplitude': max(abs(adjusted[event[0]:event[1] + 1])),
-            'Duration': len(adjusted[event[0]:event[1] + 1]) / sample_rate * 1e3,
-            'Area': sum(abs(adjusted[event[0]:event[1] + 1])) / sample_rate,
-            'Direction': 'up' if sum(sign(adjusted[event[0]:event[1] + 1])) > 0 else 'down',
+            'ID': event_id + 1,
+            'Coordinates': (event_coordinates[event_id, 0], event_coordinates[event_id, 1]),
+            'Vector': vector,
+            'Amplitude': max(abs(vector)),
+            'Duration': len(vector) / sample_rate * 1e3,
+            'Area': sum(abs(vector)) / sample_rate,
+            'Direction': 'up' if sum(sign(vector)) > 0 else 'down',
             'Outlier': False
         })
 
     return events
 
 
-def event_statistics(event_coordinates: ndarray) -> dict:
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
+def event_statistics(event_coordinates: cython.longlong[:, ::1]) -> dict:
     """
     Calculate statistics for detected events.
 
@@ -441,6 +493,7 @@ def event_statistics(event_coordinates: ndarray) -> dict:
         dict: A dictionary containing event statistics.
     """
 
+    event: cython.longlong[::1]
     results = dict()
     results['Event Count'] = len(event_coordinates)
     results['Total Event Samples'] = sum([event[1] - event[0] + 1 for event in event_coordinates]) if len(
@@ -453,7 +506,14 @@ def event_statistics(event_coordinates: ndarray) -> dict:
     return results
 
 
-def trace_statistics(trace: ndarray, baseline: ndarray, event_coordinates: Optional[ndarray] = None) -> dict:
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
+def trace_statistics(
+    trace: ndarray,
+    baseline: ndarray,
+    event_coordinates: Optional[cython.longlong[:, ::1]] = None
+) -> dict:
     """
     Calculate statistics for the trace.
 
@@ -466,15 +526,21 @@ def trace_statistics(trace: ndarray, baseline: ndarray, event_coordinates: Optio
         dict: A dictionary containing trace statistics.
     """
 
+    assert trace.shape == baseline.shape
+
     results = dict()
     # Baseline adjust the trace
     adjusted = trace - baseline
     # Masking events from the stat calculations
-    event_mask = zeros(len(trace))
+    event_id: cython.size_t
+    event_number: cython.size_t = len(event_coordinates)
+    event_mask = zeros(trace.shape, dtype=int32)
+    event_mask_view: cython.long[::1] = event_mask
     if event_coordinates is not None:
-        for event in event_coordinates:
-            event_mask[event[0]:event[1] + 1] = 1
-    adjusted = adjusted[where(event_mask == 0)]
+        for event_id in range(event_number):
+            event_mask_view[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1] = 1
+
+    adjusted: cython.double[::1] = adjusted[where(event_mask == 0)]
     # Warnings from Shapiro p-value calculation (not needed)
     with catch_warnings():
         filterwarnings('ignore')
@@ -489,7 +555,10 @@ def trace_statistics(trace: ndarray, baseline: ndarray, event_coordinates: Optio
     return results
 
 
-def sort_coordinates(trace: ndarray, baseline: ndarray, event_coordinates: ndarray) -> ndarray:
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
+def sort_coordinates(trace: ndarray, baseline: ndarray, event_coordinates: cython.longlong[:, ::1]) -> ndarray:
     """
     Sort event coordinates based on event duration and amplitude. This is used to remove the largest events first,
     which mitigates influence problems during the replacement step.
@@ -503,21 +572,27 @@ def sort_coordinates(trace: ndarray, baseline: ndarray, event_coordinates: ndarr
         ndarray: Sorted event coordinates.
     """
 
+    assert trace.shape == baseline.shape
+
     if len(event_coordinates) == 0:
-        return asarray([])
+        return asarray([], dtype=int64)
     # Baseline adjust the trace
     adjusted = trace - baseline
 
+    x: cython.longlong[::1]
     return asarray(sorted(event_coordinates, key=lambda x: (x[1] - x[0]) * max(abs(adjusted[x[0]:x[1]])),
-                          reverse=True))
+                          reverse=True), dtype=int64)
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def calculate_cutoffs(
         trace: ndarray,
         baseline: ndarray,
-        threshold: ndarray,
-        event_coordinates: ndarray,
-        sample_rate: int
+        threshold: cython.double[::1],
+        event_coordinates: cython.longlong[:, ::1],
+        sample_rate: cython.int
 ) -> ndarray:
     """
     Calculate the maximum cutoff frequency for each event presuming a boxcar event profile. This is used to determine
@@ -534,20 +609,34 @@ def calculate_cutoffs(
         ndarray: The maximum cutoff frequency for each event.
     """
 
+    assert trace.shape[0] == baseline.shape[0] == tuple(threshold.shape)[0]
+
     # Baseline adjust the trace
     adjusted = trace - baseline
-    max_cutoffs = zeros(len(event_coordinates))
+    max_cutoffs = zeros(event_coordinates.shape[0], dtype=DTYPE)
+    max_cutoffs_view: cython.double[::1] = max_cutoffs
     # Calculate the cutoff frequency for each event
-    for i, event in enumerate(event_coordinates):
-        vector = abs(adjusted[event[0]:event[1] + 1])
-        damping_ratio = (max(vector) / (max(vector) - threshold[event[1]]))
+    event_id: cython.size_t
+    event_number: cython.size_t = len(event_coordinates)
+    event_start: cython.longlong
+    event_end: cython.longlong
+    vector: cython.double[::1]
+    damping_ratio: cython.double
+    for event_id in range(event_number):
+        event_start = event_coordinates[event_id, 0]
+        event_end = event_coordinates[event_id, 1] + 1
+        vector = abs(adjusted[event_start:event_end])
+        damping_ratio = (max(vector) / (max(vector) - threshold[event_end]))
         # -3dB of boxcar by length
-        max_cutoffs[i] = 0.442947 / (sqrt((len(vector) * damping_ratio) ** 2 - 1) * (1 / sample_rate))
+        max_cutoffs_view[event_id] = 0.442947 / (sqrt((len(vector) * damping_ratio) ** 2 - 1) * (1 / sample_rate))
 
     return max_cutoffs
 
 
-def bounds_filter(trace: ndarray, window: int) -> ndarray:
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
+def bounds_filter(trace: ndarray, window: cython.int) -> ndarray:
     """
     Apply a median filter to the trace to be used for bounding. This will be deprecated in the future.
 
@@ -562,12 +651,14 @@ def bounds_filter(trace: ndarray, window: int) -> ndarray:
     return median_filter(trace, window) if window else trace
 
 
+@cython.boundscheck(False)
+@cython.initializedcheck(False)
 def event_replacer(
-        trace: ndarray,
-        baseline: ndarray,
-        event_coordinates: ndarray,
-        replace_factor: int,
-        replace_gap: int
+        trace: cython.double[::1],
+        baseline: cython.double[::1],
+        event_coordinates: cython.longlong[:, ::1],
+        replace_factor: cython.int,
+        replace_gap: cython.int
 ) -> ndarray:
     """
     The heart of the iterative process, this function replaces events in a copy of the trace (calculation trace)
@@ -585,30 +676,45 @@ def event_replacer(
         ndarray: The trace with events replaced (calculation trace).
     """
 
+    assert tuple(trace.shape) == tuple(baseline.shape)
+
     if len(event_coordinates) == 0:
-        return trace
+        return asarray(trace, dtype=DTYPE)
 
     # Replacing with the baseline
+    event_id: cython.size_t
+    event_number: cython.size_t = len(event_coordinates)
+    padded_trace: cython.double[::1] = zeros(trace.shape[0], dtype=DTYPE)
+    padded_trace[:] = trace
     if replace_gap == 0 and replace_factor == 0:
-        for event in event_coordinates:
-            trace[event[0] + 1:event[1]] = baseline[event[0] + 1:event[1]]
-        return trace
+        for event_id in range(event_number):
+            padded_trace[event_coordinates[event_id, 0] + 1:event_coordinates[event_id, 1]] = (
+                        baseline[event_coordinates[event_id, 0] + 1:event_coordinates[event_id, 1]])
+        return asarray(padded_trace, dtype=DTYPE)
 
     # Pad now to avoid padding in the loop (largest event)
-    longest = int(ceil(max([event[1] - (event[0] + 1) for event in event_coordinates]) *
-                  (replace_factor + replace_gap)))
+    longest: cython.int = int(ceil(max([event[1] - (event[0] + 1) for event in event_coordinates]) *
+                              (replace_factor + replace_gap)))
     if longest > len(trace):
         padded_trace = concatenate((trace[0] * ones(longest - len(trace)), trace[::-1], trace,
                                     trace[::-1], trace[-1] * ones(longest - len(trace))))
     else:
         padded_trace = concatenate((trace[:longest][::-1], trace, trace[-longest:][::-1]))
+    padded_trace: cython.double[::1] = padded_trace
 
     # We remove the events in order of largest to smallest (see: sort_coordinates)
-    for event in event_coordinates:
+    event_length: cython.longlong
+    event_start: cython.longlong
+    event_end: cython.longlong
+    length: cython.long
+    window: cython.double[::1]
+    segment: cython.double[::1]
+    filtered_segment: cython.double[::1]
+    for event_id in range(event_number):
         # Adjust for padding, with extra sauce
-        event_length = event[1] - (event[0] + 1)
-        event_start = (event[0] + 1) + longest
-        event_end = event[1] + longest
+        event_length = event_coordinates[event_id, 1] - (event_coordinates[event_id, 0] + 1)
+        event_start = (event_coordinates[event_id, 0] + 1) + longest
+        event_end = event_coordinates[event_id, 1] + longest
 
         # Create the filter window
         length = int(round(event_length * (replace_factor + replace_gap)))
@@ -616,7 +722,7 @@ def event_replacer(
         # Pointless
         if length == 1:
             continue
-        window = ones(length)
+        window = ones(length, dtype=DTYPE)
         if replace_gap > 0:
             window[(event_length * replace_factor) // 2:-((event_length * replace_factor) // 2)] = 0
         window = window / sum(window)
@@ -626,9 +732,12 @@ def event_replacer(
         filtered_segment = oaconvolve(segment, window, 'same')
         padded_trace[event_start:event_end] = filtered_segment[(len(window) // 2):-(len(window) // 2)]
 
-    return padded_trace[longest:-longest]
+    return asarray(padded_trace[longest:-longest], dtype=DTYPE)
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def locate_events(
         trace: ndarray,
         filtered_trace: ndarray,
@@ -650,19 +759,24 @@ def locate_events(
         ndarray: The coordinates of detected events.
     """
 
+    assert trace.shape == baseline.shape == threshold.shape == filtered_trace.shape
+
     # Filtered trace for baseline crossing indices
-    baseline_idxs = baseline_crosses(filtered_trace, baseline)
+    baseline_idxs: cython.longlong[::1] = baseline_crosses(filtered_trace, baseline)
     # Regular trace for threshold crossing indices
-    threshold_idxs = threshold_crosses(trace, baseline, threshold, event_direction)
+    threshold_idxs: cython.longlong[::1] = threshold_crosses(trace, baseline, threshold, event_direction)
     if len(threshold_idxs) == 0:
-        return asarray([])
+        return asarray([], dtype=int64)
     # Iterate to find bounds
     event_coordinates = event_bounds(threshold_idxs, baseline_idxs)
 
     return event_coordinates
 
 
-def event_bounds(threshold_idxs: cython.longlong[:], baseline_idxs: cython.long[:]) -> ndarray:
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
+def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.longlong[::1]) -> ndarray:
     """
     Determine the bounds of events based on threshold and baseline crossing indices.
 
@@ -674,10 +788,10 @@ def event_bounds(threshold_idxs: cython.longlong[:], baseline_idxs: cython.long[
         ndarray: The coordinates of detected events.
     """
 
-    spike_start: cython.longlong
-    spike_end: cython.longlong = 0
-    i: cython.longlong
-    baseline_idxs_length: cython.Py_ssize_t = len(baseline_idxs)
+    spike_start: cython.size_t
+    spike_end: cython.size_t = 0
+    i: cython.size_t
+    baseline_idxs_length: cython.size_t = len(baseline_idxs)
     event_coordinates = []
     # Iterate through the threshold crossing indices
     for i in range(len(threshold_idxs)):
@@ -691,7 +805,7 @@ def event_bounds(threshold_idxs: cython.longlong[:], baseline_idxs: cython.long[
 
         # Iterate forwards to find the end of the event
         spike_end = threshold_idxs[i] + 1
-        while baseline_idxs[spike_end] == 0 and spike_end < len(baseline_idxs) - 2:
+        while baseline_idxs[spike_end] == 0 and spike_end < baseline_idxs_length - 2:
             spike_end += 1
 
         # If the end was already passed the cutoff sample
@@ -704,7 +818,9 @@ def event_bounds(threshold_idxs: cython.longlong[:], baseline_idxs: cython.long[
     return asarray(event_coordinates, dtype=int64)
 
 
-def baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.int) -> ndarray:
+@cython.boundscheck(False)
+@cython.initializedcheck(False)
+def baseline_filter(trace: cython.double[::1], cutoff: cython.double, sample_rate: cython.int) -> ndarray:
     """
     Apply a baseline filter to the trace using a boxcar filter (moving average). This is a low-pass filter, the result
     is to be subtracted which is then a high-pass filter.
@@ -719,8 +835,8 @@ def baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.i
     """
 
     # Cutoff to boxcar length conversion (odd length)
-    length: cython.long
-    length = int(round(sqrt(0.196202 + ((cutoff * (1 / sample_rate)) ** 2)) / (cutoff * (1 / sample_rate))))
+    length: cython.size_t = int(round(sqrt(0.196202 + ((cutoff * (1 / sample_rate)) ** 2)) /
+                                (cutoff * (1 / sample_rate))))
     length = length if length % 2 == 1 else length + 1
     # Pointless
     if length == 1:
@@ -731,17 +847,19 @@ def baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.i
     # Odd length window
     window = ones(length, dtype=DTYPE) / length
     # Add fit for the edge cases
-    trace_view: cython.double[:] = trace
-    padded_trace = concatenate((trace_view[:int(length // 2)][::-1], trace_view, trace_view[-int(length // 2):][::-1]))
-    padded_trace_view: cython.double[:] = padded_trace
+    padded_trace: cython.double[::1] = concatenate((trace[:int(length // 2)][::-1], trace,
+                                                    trace[-int(length // 2):][::-1]))
     # Calculate the moving average
-    baseline = oaconvolve(padded_trace_view, window, 'same')
+    baseline = oaconvolve(padded_trace, window, 'same')
     # Cut off the edges
     baseline = baseline[int(length // 2):-int(length // 2)]
 
     return baseline
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def baseline_crosses(trace: ndarray, baseline: ndarray) -> ndarray:
     """
     Identify the indices where the trace crosses the baseline.
@@ -755,25 +873,27 @@ def baseline_crosses(trace: ndarray, baseline: ndarray) -> ndarray:
     """
 
     assert trace.shape == baseline.shape
-    assert trace.dtype == baseline.dtype == DTYPE
 
     # Baseline adjust the trace
-    adjusted = trace - baseline
+    adjusted: cython.double[::1] = trace - baseline
     # Sign the trace then difference to find zero crossings
     # Zero crossing indices are marked by 1, 0 otherwise
-    zero_trace = zeros(trace.shape, dtype=int32)
+    zero_trace = zeros(trace.shape, dtype=int64)
     baseline_cross = where(diff(sign(adjusted)))[0]
     zero_trace[baseline_cross] = 1
 
     return zero_trace
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def thresholder(
         trace: ndarray,
         baseline: ndarray,
         z_score: cython.double,
         window: Optional[int64] = None,
-        event_coordinates: Optional[cython.longlong[:, :]] = None,
+        event_coordinates: Optional[cython.longlong[:, ::1]] = None,
         method: str = 'iqr'
 ) -> ndarray:
     """
@@ -793,37 +913,34 @@ def thresholder(
     """
 
     assert trace.shape == baseline.shape
-    assert trace.dtype == baseline.dtype == DTYPE
 
     # Baseline adjust the trace
     adjusted = trace - baseline
-    adjusted_view: cython.double[:] = adjusted
+    adjusted_view: cython.double[::1] = adjusted
 
     # Masking events from the std calculation
-    event_id: cython.Py_ssize_t
-    event_number: cython.Py_ssize_t = event_coordinates.shape[0]
+    event_id: cython.size_t
+    event_number: cython.size_t = len(event_coordinates)
     event_mask = zeros(trace.shape, dtype=int32)
-    event_mask_view: cython.long[:] = event_mask
+    event_mask_view: cython.long[::1] = event_mask
     if event_coordinates is not None:
         for event_id in range(event_number):
             event_mask_view[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1] = 1
 
     # Number of segments to divide the trace into
-    window: cython.longlong
-    segments: cython.long
-    window = int(round(window)) if window is not None else len(trace)
-    segments = len(trace) // window if len(trace) // window else 1
+    window: cython.longlong = int(round(window)) if window is not None else len(trace)
+    segments: cython.long = len(trace) // window if len(trace) // window else 1
 
     # Calculate the threshold in segments
     i: cython.long
     start: cython.longlong
     end: cython.longlong
-    current_segment: ndarray
+    current_segment: cython.double[::1]
     q1: cython.double
     q3: cython.double
     n: cython.longlong
     standard_deviation = zeros(trace.shape, dtype=DTYPE)
-    standard_deviation_view: cython.double[:] = standard_deviation
+    standard_deviation_view: cython.double[::1] = standard_deviation
     for i in range(segments):
         start = i * window
         end = (i + 1) * window if i != segments - 1 else len(trace)
@@ -845,6 +962,9 @@ def thresholder(
     return standard_deviation * z_score
 
 
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.initializedcheck(False)
 def threshold_crosses(
     trace: ndarray,
     baseline: ndarray,
@@ -866,15 +986,17 @@ def threshold_crosses(
     """
 
     assert trace.shape == baseline.shape == threshold.shape
-    assert trace.dtype == baseline.dtype == threshold.dtype == DTYPE
 
     # Baseline adjust the trace
     adjusted = trace - baseline
 
+    crosses = zeros(trace.shape, dtype=int64)
     if event_direction == 'up':
-        return where(diff(sign(adjusted - threshold)) > 0)[0]
+        crosses = where(diff(sign(adjusted - threshold)) > 0)[0]
     elif event_direction == 'down':
-        return where(diff(sign(adjusted + threshold)) < 0)[0]
+        crosses = where(diff(sign(adjusted + threshold)) < 0)[0]
     else:
-        return sort(concatenate((where(diff(sign(adjusted + threshold)) < 0)[0],
-                                 where(diff(sign(adjusted - threshold)) > 0)[0])))
+        crosses = sort(concatenate((where(diff(sign(adjusted + threshold)) < 0)[0],
+                                    where(diff(sign(adjusted - threshold)) > 0)[0])))
+
+    return crosses

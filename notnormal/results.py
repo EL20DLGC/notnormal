@@ -1,3 +1,5 @@
+# cython: infer_types=True
+
 """
 This module provides classes for representing events and iterations of event detection and baseline determination
 in (nano)electrochemical time series data.

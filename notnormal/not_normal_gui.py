@@ -1693,8 +1693,8 @@ class NotNormalGUI(tk.Tk):
             # Axon binary format
             if path.endswith('.abf'):
                 data = pyabf.ABF(path)
-                trace = data.sweepY.astype(np.double)
-                time_vector = data.sweepX.astype(np.double)
+                trace = data.sweepY.astype(float)
+                time_vector = data.sweepX.astype(float)
             # Separated format
             elif path.endswith('.csv') or path.endswith('.tsv') or path.endswith('.txt') or path.endswith('.dat'):
                 data = pd.read_csv(path, sep=None, engine='python')
@@ -1706,7 +1706,7 @@ class NotNormalGUI(tk.Tk):
         except Exception as e:
             messagebox.showerror('Error', f'Loading failed: {repr(e)}')
             return
-        print(f'Loading time: {time.time() - current_time:.2f}')
+        print(f'Loading time: {time.time() - current_time:.4f}')
 
         self.reset_all()
         # Update the trace vectors
@@ -1781,7 +1781,7 @@ class NotNormalGUI(tk.Tk):
         results = results.get()
 
         self.widgets['analysis_view']['progress_bar'].stop()
-        print(f'Estimate time: {time.time() - current_time:.2f}')
+        print(f'Estimate time: {time.time() - current_time:.4f}')
 
         # Update analysis results with estimate results
         self.process_results(results)
@@ -1850,7 +1850,7 @@ class NotNormalGUI(tk.Tk):
         results = results.get()
 
         self.widgets['analysis_view']['progress_bar'].stop()
-        print(f'Iteration time: {time.time() - current_time:.2f}')
+        print(f'Iteration time: {time.time() - current_time:.4f}')
 
         # Update analysis results with iteration results
         self.process_results(results)
