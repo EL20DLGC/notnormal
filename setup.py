@@ -29,11 +29,10 @@ setup(
     description="This package revolves around the NotNormal algorithm, which combines estimation and iteration to "
                 "automatically extract events from (nano)electrochemical time series data.",
     long_description=long_description,
-    packages=find_packages(),
+    packages=find_packages() + ["notnormal.data"],
     install_requires=[
         "numpy",
         "scipy",
-        "numba",
         "stochastic",
         "ttkbootstrap",
         "matplotlib",

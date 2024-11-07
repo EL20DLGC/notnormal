@@ -18,14 +18,14 @@ from notnormal.results import Iteration
 from warnings import catch_warnings, simplefilter, filterwarnings
 import cython
 
-DTYPE = double
-
 if cython.compiled:
     COMPILED = True
-    print('Cython compiled')
+    print('not_normal compiled')
 else:
     COMPILED = False
-    print('Cython not compiled')
+    print('not_normal not compiled')
+
+DTYPE = double
 
 
 @cython.boundscheck(False)
@@ -369,12 +369,12 @@ def initial_estimate(
     threshold_view: cython.double[::1] = results.threshold
     coordinates_view: cython.longlong[:, ::1] = results.event_coordinates
     max_cutoffs: cython.double[::1] = calculate_cutoffs(trace, results.baseline, threshold_view, coordinates_view,
-                                                        sample_rate)
+                                                        cutoff, sample_rate)
 
     # Q1 of the required cutoffs, original needs to be added on top
     calculated_cutoff: cython.double
     try:
-        calculated_cutoff = percentile(max_cutoffs, 25) + cutoff
+        calculated_cutoff = percentile(max_cutoffs, 25)
     except IndexError:
         calculated_cutoff = cutoff
     # Do not want to be above recommended antialiasing cutoff
@@ -533,7 +533,9 @@ def trace_statistics(
     adjusted = trace - baseline
     # Masking events from the stat calculations
     event_id: cython.size_t
-    event_number: cython.size_t = len(event_coordinates)
+    event_number: cython.size_t
+    if event_coordinates is not None:
+        event_number = len(event_coordinates)
     event_mask = zeros(trace.shape, dtype=int32)
     event_mask_view: cython.long[::1] = event_mask
     if event_coordinates is not None:
@@ -592,6 +594,7 @@ def calculate_cutoffs(
         baseline: ndarray,
         threshold: cython.double[::1],
         event_coordinates: cython.longlong[:, ::1],
+        cutoff: cython.double,
         sample_rate: cython.int
 ) -> ndarray:
     """
@@ -603,6 +606,7 @@ def calculate_cutoffs(
         baseline (ndarray): The baseline of the trace.
         threshold (ndarray): The threshold for event detection.
         event_coordinates (ndarray): The coordinates of detected events.
+        cutoff (float): The cutoff frequency used to determine the baseline.
         sample_rate (int): The sample rate of the trace.
 
     Returns:
@@ -629,6 +633,7 @@ def calculate_cutoffs(
         damping_ratio = (max(vector) / (max(vector) - threshold[event_end]))
         # -3dB of boxcar by length
         max_cutoffs_view[event_id] = 0.442947 / (sqrt((len(vector) * damping_ratio) ** 2 - 1) * (1 / sample_rate))
+        max_cutoffs_view[event_id] += cutoff
 
     return max_cutoffs
 
@@ -920,7 +925,9 @@ def thresholder(
 
     # Masking events from the std calculation
     event_id: cython.size_t
-    event_number: cython.size_t = len(event_coordinates)
+    event_number: cython.size_t
+    if event_coordinates is not None:
+        event_number = len(event_coordinates)
     event_mask = zeros(trace.shape, dtype=int32)
     event_mask_view: cython.long[::1] = event_mask
     if event_coordinates is not None:

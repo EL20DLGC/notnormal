@@ -1,8 +1,9 @@
 # cython: infer_types=True
 
+import copy
 import csv
 import traceback
-import multiprocessing
+import cython
 import os.path
 import queue
 import time
@@ -28,6 +29,14 @@ from ttkbootstrap import Style
 from notnormal import not_normal as nn
 from notnormal.results import Events
 
+
+if cython.compiled:
+    COMPILED = True
+    print('not_normal_gui compiled')
+else:
+    COMPILED = False
+    print('not_normal_gui not compiled')
+
 colours = {
     'baseline': '#FF0707',
     'threshold': '#FF9A52',
@@ -44,7 +53,6 @@ LARGE_FONT = 16
 MEDIUM_FONT = 14
 SMALL_FONT = 10
 
-
 rc('font', size=SMALL_FONT)
 
 
@@ -60,7 +68,7 @@ class NotNormalGUI(tk.Tk):
         if hasattr(sys, '_MEIPASS'):
             self.image = os.path.join(sys._MEIPASS, 'data', 'landing_page.png')
         else:
-            self.image = os.path.join('data', 'landing_page.png')
+            self.image = os.path.join(__file__, '..', 'data', 'landing_page.png')
         photoimage = ImageTk.PhotoImage(Image.open(self.image))
         self.iconphoto(True, photoimage)
         # Background
@@ -1028,53 +1036,68 @@ class NotNormalGUI(tk.Tk):
         if self.time_vector is not None:
             self.trace_information['duration'].set(f'{self.time_vector[-1] - self.time_vector[0]:.1f}')
 
+    @cython.boundscheck(False)
     def update_figure(self, title=None, retain_view=True):
         if self.widgets['analysis_view']['fig'].axes:
             ax = self.widgets['analysis_view']['fig'].axes[0]
         else:
             return
 
-        # Clear figure
-        for lines in ax.get_lines():
-            lines.remove()
+        if type(self.time_vector) is np.ndarray and self.time_step:
+            # Limits
+            lower = int(np.round((self.figure_options['x_limit_lower'].get() - self.time_vector[0]) / self.time_step))
+            upper = int(np.round((self.figure_options['x_limit_upper'].get() - self.time_vector[0]) / self.time_step))
+            # Clear lines except the trace unless limits changed
+            replot_trace = True
+            for lines in ax.get_lines():
+                if lines.get_label() == 'trace':
+                    xlower = int(np.round((lines.get_xdata()[0] - self.time_vector[0]) / self.time_step))
+                    xupper = int(np.round((lines.get_xdata()[-1] - self.time_vector[0]) / self.time_step))
+                    if lower != xlower or upper != xupper:
+                        lines.remove()
+                    else:
+                        replot_trace = False
+                else:
+                    lines.remove()
 
-        # Plot the vectors
-        if np.any(self.time_vector) and self.time_step:
-            lower = int((self.figure_options['x_limit_lower'].get() - self.time_vector[0]) / self.time_step)
-            upper = int((self.figure_options['x_limit_upper'].get() - self.time_vector[0]) / self.time_step)
-
+            time_vector = self.time_vector[lower:upper + 1]
             # Plot the trace
-            if np.any(self.trace):
-                ax.plot(self.time_vector[lower:upper], self.trace[lower:upper], label='trace')
+            if type(self.trace) is np.ndarray and replot_trace:
+                ax.plot(time_vector, self.trace[lower:upper + 1], label='trace')
 
             # Plot the calculation trace
-            if np.any(self.calculation_trace):
-                ax.plot(self.time_vector[lower:upper], self.calculation_trace[lower:upper],
+            if type(self.calculation_trace) is np.ndarray:
+                ax.plot(time_vector, self.calculation_trace[lower:upper + 1],
                         label='calculation_trace')
 
             # Plot the filtered trace
-            if np.any(self.filtered_trace):
-                ax.plot(self.time_vector[lower:upper], self.filtered_trace[lower:upper],
+            if type(self.filtered_trace) is np.ndarray:
+                ax.plot(time_vector, self.filtered_trace[lower:upper + 1],
                         label='filtered_trace')
 
+            # Plot the baseline
+            if type(self.baseline) is np.ndarray:
+                ax.plot(time_vector, self.baseline[lower:upper + 1], label='baseline')
+
+                # Plot the threshold
+                if type(self.threshold) is np.ndarray:
+                    ax.plot(time_vector, self.baseline[lower:upper + 1] + self.threshold[lower:upper + 1],
+                            label='threshold')
+                    ax.plot(time_vector, self.baseline[lower:upper + 1] - self.threshold[lower:upper + 1],
+                            label='threshold')
+
             # Plot the events
-            if np.any(self.event_coordinates):
+            xlist = []
+            ylist = []
+            if type(self.event_coordinates) is np.ndarray:
                 for event in self.event_coordinates:
                     if event[0] < lower or event[1] > upper:
                         continue
-                    ax.plot(self.time_vector[event[0]:event[1] + 1], self.trace[event[0]:event[1] + 1],
-                            label='events')
-
-            # Plot the baseline
-            if np.any(self.baseline):
-                ax.plot(self.time_vector[lower:upper], self.baseline[lower:upper], label='baseline')
-
-            # Plot the threshold
-            if np.any(self.threshold) and np.any(self.baseline):
-                ax.plot(self.time_vector[lower:upper], self.baseline[lower:upper] + self.threshold[lower:upper],
-                        label='threshold')
-                ax.plot(self.time_vector[lower:upper], self.baseline[lower:upper] - self.threshold[lower:upper],
-                        label='threshold')
+                    xlist.extend(self.time_vector[event[0]:event[1] + 1])
+                    xlist.append(None)
+                    ylist.extend(self.trace[event[0]:event[1] + 1])
+                    ylist.append(None)
+                ax.plot(xlist, ylist, label='events')
 
             # Set visibility, colour, linewidth and linestyle
             for line in ax.get_lines():
@@ -1084,12 +1107,15 @@ class NotNormalGUI(tk.Tk):
                 line.set_color(self.figure_options['colour'][line.get_label()].get())
                 line.set_linewidth(self.figure_options['linewidth'][line.get_label()].get())
                 line.set_linestyle(self.figure_options['style'][line.get_label()].get())
+        else:
+            ax.clear()
 
         # Set limits
         if not retain_view:
             ax.relim()
             ax.autoscale(True)
             self.widgets['analysis_view']['toolbar'].update()
+            self.widgets['analysis_view']['toolbar'].push_current()
 
         # Set title
         if title:
@@ -1172,23 +1198,27 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['fig'].canvas.draw()
 
     def update_results(self):
-        # Remove all tabs
-        for tab in self.widgets['results']['notebook'].tabs():
-            self.widgets['results']['notebook'].forget(tab)
-        for widget in self.widgets['results']['notebook'].winfo_children():
-            widget.destroy()
-
         # Add the final tab
+        tabs = []
         if 'Final' in self.analysis_results.keys():
-            self.create_tab(self.analysis_results['Final'], 'Final')
+            tabs.append(self.create_tab(self.analysis_results['Final'], 'Final'))
 
         # Add the iteration tab
         if 'Iteration' in self.analysis_results.keys():
-            self.create_iteration_tab()
+            tabs.append(self.create_iteration_tab())
 
         # Add the estimate tab
         if 'Estimate' in self.analysis_results.keys():
-            self.create_tab(self.analysis_results['Estimate'], 'Estimate')
+            tabs.append(self.create_tab(self.analysis_results['Estimate'], 'Estimate'))
+
+        # Destroy the old, add the new
+        for widget in self.widgets['results']['notebook'].winfo_children():
+            if str(widget) in self.widgets['results']['notebook'].tabs():
+                self.widgets['results']['notebook'].forget(widget)
+                widget.destroy()
+
+        for tab in tabs:
+            self.widgets['results']['notebook'].add(tab[0], text=tab[1])
 
         if self.widgets['results']['notebook'].tabs():
             self.widgets['results']['notebook'].select(0)
@@ -1280,11 +1310,8 @@ class NotNormalGUI(tk.Tk):
         event_frame.grid(row=2, column=0, sticky="nsew")
         footer_separator.grid(row=3, column=0, columnspan=2, sticky="nsew")
 
-        # Statistics
+        # Populate the main statistics
         main_stats = {**results.trace_stats, **results.event_stats}
-        table_stats = results.events.events
-
-        # Populate the statistics
         labels = []
         values = []
         seperators = []
@@ -1306,11 +1333,33 @@ class NotNormalGUI(tk.Tk):
                 seperators[-1].grid(row=row + 1, column=0, columnspan=2, sticky="nsew")
             row += 2
 
+        # Populate the event statistics
+        event_stats = results.events.events
+        if not event_stats:
+            return tab, title
+
+        keys = [key for key in event_stats[0].keys()]
+        table_stats = [{} for i in range(len(event_stats))]
+        max_width = dict()
+        # Format
+        for key in keys:
+            if key not in self.table_columns:
+                continue
+
+            for i, stat in enumerate(event_stats):
+                if key == 'Coordinates':
+                    table_stats[i][key] = f'({stat[key][0]}, {stat[key][1]})'
+                else:
+                    table_stats[i][key] = f'{np.round(stat[key], 2):g}'
+            row_width = max([len(stat[key]) for stat in table_stats]) * 9
+            max_width[key] = row_width if row_width > len(str(key)) * 8 else len(str(key)) * 8
+        for i, stat in enumerate(event_stats):
+            table_stats[i]['Outlier'] = stat['Outlier']
+
         # Event table
-        keys = [key for key in table_stats[0].keys() if key in self.table_columns]
         tree = ttk.Treeview(
             event_frame,
-            columns=keys,
+            columns=[key for key in keys if key in self.table_columns],
             style='primary.Treeview',
             padding=0,
             show='headings',
@@ -1318,18 +1367,9 @@ class NotNormalGUI(tk.Tk):
         # Tags for colours
         tree.tag_configure('outlier', background=colours['baseline'], foreground=self.style.colors.secondary)
         tree.tag_configure('not_outlier', background='white', foreground=self.style.colors.secondary)
-        # Get column widths
-        max_width = dict().fromkeys(keys, 0)
-        for key in keys:
-            max_width[key] = len(str(key)) * 8
-            if key == 'Coordinates':
-                row_width = max([len(f'({stat[key][0]}, {stat[key][1]})') for stat in table_stats]) * 9
-            else:
-                row_width = max([len(f'{np.round(stat[key], 2):g}') for stat in table_stats]) * 9
-            max_width[key] = row_width if row_width > max_width[key] else max_width[key]
 
         # Set the headings
-        for key in table_stats[0].keys():
+        for key in keys:
             if key not in self.table_columns:
                 continue
 
@@ -1347,10 +1387,7 @@ class NotNormalGUI(tk.Tk):
                 if key not in self.table_columns:
                     continue
 
-                if key == 'Coordinates':
-                    table_data += (f'({table_stats[i]["Coordinates"][0]}, {table_stats[i]["Coordinates"][1]})',)
-                else:
-                    table_data += (f'{np.round(table_stats[i][key], 2):g}',)
+                table_data += (table_stats[i][key],)
 
             tree.insert("", tk.END, text=f'{i + 1}', values=table_data,
                         tags=('outlier' if table_stats[i]['Outlier'] else 'not_outlier'))
@@ -1372,7 +1409,7 @@ class NotNormalGUI(tk.Tk):
         event_frame.columnconfigure(1, weight=1)
         tree.grid(row=0, column=1, sticky="nsew", pady=(0, 1))
 
-        self.widgets['results']['notebook'].add(tab, text=title)
+        return tab, title
 
     def create_iteration_tab(self):
         if 'Iteration' in self.analysis_results.keys():
@@ -1455,11 +1492,12 @@ class NotNormalGUI(tk.Tk):
         for children in toolbar.winfo_children():
             children.configure(background='white')
         toolbar.update()
+        toolbar.push_current()
         toolbar.pack(side=tk.TOP, fill=tk.X, expand=1)
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
         canvas.draw()
 
-        self.widgets['results']['notebook'].add(tab, text='Iteration')
+        return tab, 'Iteration'
 
     def sort_column(self, tree, col, reverse):
         def check_column(value):
@@ -1502,19 +1540,21 @@ class NotNormalGUI(tk.Tk):
                 event_coordinates.append(event['Coordinates'])
 
         # Recalculate cutoff
-        self.analysis_results[title].event_stats['Max Cutoff'] = np.percentile(
-            np.round(
+        self.analysis_results[title].event_stats['Max Cutoff'] = np.round(
+            np.percentile(
                 nn.calculate_cutoffs(
                     self.trace,
                     self.baseline,
                     self.threshold,
-                    event_coordinates,
-                    1 / self.time_step
+                    np.asarray(event_coordinates),
+                    self.analysis_options['estimate_cutoff'].get(),
+                    int(1 / self.time_step)
                 ),
-                2
+                25
             ),
-            25
+            2
         )
+
         self.analysis_options['cutoff'].set(self.analysis_results[title].event_stats['Max Cutoff'])
         self.flash_entry(self.widgets['analyse']['cutoff_input'])
 
@@ -1531,12 +1571,13 @@ class NotNormalGUI(tk.Tk):
         event_coordinates = events.get(event_id)['Coordinates']
         extra = (event_coordinates[1] - event_coordinates[0]) * 20
         start = event_coordinates[0] - extra if event_coordinates[0] - extra > 0 else 0
-        end = event_coordinates[1] + extra if event_coordinates[1] + extra < len(self.trace) else len(self.trace)
+        end = event_coordinates[1] + extra if event_coordinates[1] + extra < len(self.trace) else len(self.trace) - 1
 
-        # Update the figure
-        self.figure_options['x_limit_lower'].set(start * self.time_step + self.time_vector[0])
-        self.figure_options['x_limit_upper'].set(end * self.time_step + self.time_vector[0])
-        self.update_figure(retain_view=False)
+        lower = int(np.round((self.figure_options['x_limit_lower'].get() - self.time_vector[0]) / self.time_step))
+        upper = int(np.round((self.figure_options['x_limit_upper'].get() - self.time_vector[0]) / self.time_step))
+        if start < lower or end > upper:
+            messagebox.showerror('Error', 'Event out of bounds (Options -> X-Limit)')
+            return
 
         # Flash the event
         def remove():
@@ -1545,8 +1586,14 @@ class NotNormalGUI(tk.Tk):
                 self.widgets['analysis_view']['fig'].canvas.draw()
 
         ax = self.widgets['analysis_view']['fig'].axes[0]
+        trace_min = np.min(self.trace[start:end])
+        trace_max = np.max(self.trace[start:end])
+        difference = 0.5 * abs(trace_max - trace_min)
+        ax.set(xlim=(start * self.time_step + self.time_vector[0], end * self.time_step + self.time_vector[0]),
+               ylim=(trace_min - difference, trace_max + difference))
         line = ax.plot(self.time_vector[event_coordinates[0]:event_coordinates[1] + 1],
                        self.trace[event_coordinates[0]:event_coordinates[1] + 1], 'r', linewidth=3)
+        self.widgets['analysis_view']['toolbar'].push_current()
         self.widgets['analysis_view']['fig'].canvas.draw()
         try:
             self.after(500, remove)
@@ -1565,7 +1612,7 @@ class NotNormalGUI(tk.Tk):
                 if upper <= lower:
                     self.set_x_limits()
                 # Check if the value is within bounds
-                if self.time_vector is not None and (upper >= self.time_vector[-1] or lower < self.time_vector[0]):
+                if self.time_vector is not None and (upper > self.time_vector[-1] or lower < self.time_vector[0]):
                     self.set_x_limits()
                 self.update_figure(retain_view=False)
                 return
@@ -1601,8 +1648,6 @@ class NotNormalGUI(tk.Tk):
             self.figure_options['x_limit_upper'].set(self.default_figure_options['x_limit_upper'])
         else:
             self.figure_options['x_limit_lower'].set(self.time_vector[0])
-            # self.figure_options['x_limit_upper'].set(self.time_vector[1000000 if
-            #                                          len(self.time_vector) > 1000000 else -1])
             self.figure_options['x_limit_upper'].set(self.time_vector[-1])
 
     def flash_entry(self, entry):
@@ -1657,7 +1702,7 @@ class NotNormalGUI(tk.Tk):
         events.events = nn.simple_extractor(self.trace, self.baseline, self.event_coordinates, int(1 / self.time_step))
         # Store maximum cutoff
         max_cutoffs = nn.calculate_cutoffs(self.trace, self.baseline, self.threshold, self.event_coordinates,
-                                           int(1 / self.time_step))
+                                           self.analysis_options['estimate_cutoff'].get(), int(1 / self.time_step))
         events.add_feature('Max Cutoff', max_cutoffs)
         self.analysis_results[label].events = events
         # Update the cutoff estimate window
@@ -1671,6 +1716,7 @@ class NotNormalGUI(tk.Tk):
 
         # Update the results window
         self.update_results()
+        self.update()
         # Show the vectors
         self.update_figure(title=label)
 
@@ -1901,10 +1947,3 @@ class NotNormalGUI(tk.Tk):
 
         # Set the flag
         self.flags['saved'] = True
-
-
-if __name__ == "__main__":
-    multiprocessing.freeze_support()
-    app = NotNormalGUI()
-    app.mainloop()
-    app.quit()
