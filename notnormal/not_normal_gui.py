@@ -1,6 +1,6 @@
 # cython: infer_types=True
 
-import copy
+import ctypes
 import csv
 import traceback
 import cython
@@ -14,10 +14,10 @@ from idlelib import tooltip
 from os.path import basename
 from threading import Thread
 from tkinter import ttk, colorchooser, messagebox
+from tkinter.font import Font
 import numpy as np
 import pandas as pd
 import pyabf
-import ttkbootstrap
 from PIL import Image, ImageTk
 from matplotlib import patheffects as pe, rc
 from matplotlib.backend_bases import key_press_handler
@@ -25,7 +25,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 from scipy.stats import norm
-from ttkbootstrap import Style
+from ttkbootstrap import Style, Floodgauge
 from notnormal import not_normal as nn
 from notnormal.results import Events
 
@@ -37,23 +37,12 @@ else:
     COMPILED = False
     print('not_normal_gui not compiled')
 
-colours = {
-    'baseline': '#FF0707',
-    'threshold': '#FF9A52',
-    'trace': '#5E3C99',
-    'calculation_trace': '#B2ABD2',
-    'filtered_trace': '#008837',
-    'events': '#2dbd86'
-}
-
 PADDING = 6
 WINDOW_PADDING = 3
 ENTRY_WIDTH = 9
 LARGE_FONT = 16
 MEDIUM_FONT = 14
 SMALL_FONT = 10
-
-rc('font', size=SMALL_FONT)
 
 
 class NotNormalGUI(tk.Tk):
@@ -62,6 +51,7 @@ class NotNormalGUI(tk.Tk):
 
         # Title
         self.title("Not Normal")
+        self.tk.call('tk', 'appname', 'NotNormal')
         # Loose focus pls
         self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
         # Icon
@@ -74,7 +64,15 @@ class NotNormalGUI(tk.Tk):
         # Background
         self.configure(bg="black")
         # Root window size and resizability
-        self.geometry("1600x900")
+        self.height = self.winfo_screenheight()
+        self.width = self.winfo_screenwidth()
+        self.geometry(f'{self.width}x{self.height}')
+        # DPI scaling
+        if sys.platform == 'win32':
+            scaling = ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100
+        else:
+            scaling = 1
+        self.tk.call('tk', 'scaling', self.winfo_fpixels('1i') / (72 * scaling))
         # setting tkinter window size
         self.state('zoomed')
         self.resizable(True, True)
@@ -90,7 +88,7 @@ class NotNormalGUI(tk.Tk):
         self.default_analysis_options = dict()
         # Analysis results
         self.analysis_results = dict()
-        self.table_columns = ['ID', 'Coordinates', 'Max Cutoff', 'Duration', 'Amplitude']
+        self.table_columns = ['ID', 'Area', 'Max Cutoff', 'Duration', 'Amplitude']
         # Trace information variables
         self.trace_information = dict()
         self.path = None
@@ -107,6 +105,8 @@ class NotNormalGUI(tk.Tk):
 
         # Initialise the style
         self.style = Style(theme='pulse')
+        self.fonts = None
+        self.colours = None
         self.init_style()
         # Create layout
         self.init_layout()
@@ -155,7 +155,7 @@ class NotNormalGUI(tk.Tk):
 
         # Change the window size
         self.resizable(False, False)
-        self.geometry("640x390")
+        self.geometry(f"640x390+{self.width // 2 - 320}+{self.height // 2 - 195}")
         self.state('normal')
 
     def landing_load(self):
@@ -167,7 +167,7 @@ class NotNormalGUI(tk.Tk):
                 self.widgets['landing'][key].destroy()
 
             # Show the main window
-            self.geometry("1600x900")
+            self.geometry(f'{self.width}x{self.height}')
             self.state('zoomed')
             self.resizable(True, True)
             self.toggle_load('show')
@@ -177,27 +177,58 @@ class NotNormalGUI(tk.Tk):
             self.widgets['analyse']['estimate'].focus_set()
 
     def init_style(self):
+        # Initialise the colours
+        self.colours = {
+            'baseline': '#FF0707',
+            'threshold': '#FF9A52',
+            'trace': '#5E3C99',
+            'calculation_trace': '#B2ABD2',
+            'filtered_trace': '#008837',
+            'events': '#2dbd86'
+        }
+        # Initialise the font
+        self.fonts = {
+            'small': Font(family='Helvetica', name='small', size=SMALL_FONT, weight='normal', slant='roman'),
+            'small_i': Font(family='Helvetica', name='small_i', size=SMALL_FONT, weight='normal', slant='italic'),
+            'small_b': Font(family='Helvetica', name='small_b', size=SMALL_FONT, weight='bold', slant='roman'),
+            'medium': Font(family='Helvetica', name='medium', size=MEDIUM_FONT, weight='normal', slant='roman'),
+            'medium_i': Font(family='Helvetica', name='medium_i', size=MEDIUM_FONT, weight='normal', slant='italic'),
+            'medium_b': Font(family='Helvetica', name='medium_b', size=MEDIUM_FONT, weight='bold', slant='roman'),
+            'large': Font(family='Helvetica', name='large', size=LARGE_FONT, weight='normal', slant='roman'),
+            'large_i': Font(family='Helvetica', name='large_i', size=LARGE_FONT, weight='normal', slant='italic'),
+            'large_b': Font(family='Helvetica', name='large_b', size=LARGE_FONT, weight='bold', slant='roman')
+        }
         # Initialise the style
-        self.style.configure('TLabel', anchor='w', font=('bold', SMALL_FONT))
-        self.style.configure('TButton', font=('bold', MEDIUM_FONT), anchor='center', padding=PADDING)
-        self.style.configure('TCombobox', padding=PADDING, font=('bold', SMALL_FONT))
-        self.style.configure('TSpinbox', padding=PADDING, font=('bold', SMALL_FONT))
-        self.style.configure('TEntry', padding=PADDING, font=('bold', SMALL_FONT))
-        self.style.configure('primary.Inverse.TLabel', font=('bold', LARGE_FONT), anchor=tk.CENTER,
-                             justify=tk.CENTER)
-        self.style.configure('secondary.TLabelframe.Label', font=('bold', MEDIUM_FONT),
-                             foreground=self.style.colors.secondary)
+        self.style.configure('.', font=self.fonts['small'])
+        # Labels
+        self.style.configure('TLabel', anchor=tk.W, font=self.fonts['small'])
+        self.style.configure('primary.Inverse.TLabel', anchor=tk.CENTER, justify=tk.CENTER,
+                             font=self.fonts['large'])
+        self.style.configure('secondary.TLabelframe.Label', foreground=self.style.colors.secondary,
+                             font=self.fonts['medium'])
+        # Buttons
+        self.style.configure('TButton', anchor=tk.CENTER, padding=PADDING, font=self.fonts['medium_i'])
+        self.style.configure('primary.TButton', anchor=tk.CENTER, padding=PADDING, font=self.fonts['large_i'])
+        self.style.configure('Small.secondary.Outline.TButton', font=self.fonts['small_i'])
+        # Entries
+        self.style.configure('TCombobox', padding=PADDING, font=self.fonts['small_b'])
+        self.style.configure('TSpinbox', padding=PADDING, font=self.fonts['small_b'])
+        self.style.configure('TEntry', padding=PADDING, font=self.fonts['small_b'])
+        # Notebook
         self.style.configure('TNotebook', bordercolor='white', padding=0)
-        self.style.configure('TNotebook.Tab', padding=0, font=MEDIUM_FONT)
+        self.style.configure('TNotebook.Tab', padding=0, font=self.fonts['medium'])
         self.style.map('TNotebook.Tab', background=[('selected', self.style.colors.primary)],
                        foreground=[('selected', 'white')])
-        self.style.configure('Horizontal.TFloodgauge', thickness=30, barsize=60)
-        self.style.configure('Treeview.Heading', relief='flat')
+        # Treeview
+        self.style.configure('Treeview.Heading', relief='flat', font=self.fonts['small_i'])
         self.style.configure('Treeview.Item', indicatormargins=0, indicatorsize=0, padding=0)
         self.style.configure('Treeview.Cell', padding=0)
-        self.style.configure('Treeview', fieldbackground=self.style.colors.secondary, indent=0, rowheight=10)
-        self.style.configure('Small.secondary.Outline.TButton', font=('bold', SMALL_FONT))
-        self.style.configure('primary.TButton')
+        self.style.configure('Treeview', fieldbackground=self.style.colors.secondary, indent=0,
+                             rowheight=self.fonts['small'].metrics('linespace') + 4)
+        # Misc
+        self.style.configure('Horizontal.TFloodgauge', thickness=30, barsize=60)
+        # Matplotlib
+        rc('font', size=SMALL_FONT)
 
     def init_layout(self):
         # Main window
@@ -227,7 +258,7 @@ class NotNormalGUI(tk.Tk):
         self.windows['results'] = ttk.Frame(self.windows['right'], style='primary.TFrame')
 
         # Left layout
-        self.windows['left'].columnconfigure(0, weight=1, minsize=300)
+        self.windows['left'].columnconfigure(0, weight=1, minsize=self.width // 6)
         self.windows['left'].rowconfigure(0, weight=1)
         self.windows['load'].grid(row=0, column=0, sticky="nsew", pady=(WINDOW_PADDING, 0), padx=(WINDOW_PADDING, 0))
         self.windows['left'].rowconfigure(1, weight=2)
@@ -237,7 +268,7 @@ class NotNormalGUI(tk.Tk):
         self.windows['center'].rowconfigure(0, weight=1)
         self.windows['analysis_view'].grid(row=0, column=0, sticky="nsew", pady=WINDOW_PADDING, padx=WINDOW_PADDING)
         # Right layout
-        self.windows['right'].columnconfigure(0, weight=1, minsize=300)
+        self.windows['right'].columnconfigure(0, weight=1, minsize=self.width // 6)
         self.windows['right'].rowconfigure(0, weight=1)
         self.windows['results'].grid(row=0, column=0, sticky="nsew", pady=WINDOW_PADDING, padx=(0, WINDOW_PADDING))
 
@@ -281,8 +312,9 @@ class NotNormalGUI(tk.Tk):
         self.widgets['load']['filename_label'] = ttk.Label(self.windows['load_internal'], text="Filename")
         self.trace_information['filename'] = tk.StringVar()
         self.trace_information['filename'].set('')
+        wrap = (self.width // 6) - (7 * PADDING) - self.fonts['small'].measure('Sample Rate (Hz)')
         self.widgets['load']['filename'] = ttk.Label(self.windows['load_internal'],
-                                                     textvariable=self.trace_information['filename'], wraplength=160)
+                                                     textvariable=self.trace_information['filename'], wraplength=wrap)
         self.widgets['load']['filename_separator'] = ttk.Separator(self.windows['load_internal'])
         # Sample rate information
         self.widgets['load']['sample_rate_label'] = ttk.Label(self.windows['load_internal'], text="Sample Rate (Hz)")
@@ -357,7 +389,7 @@ class NotNormalGUI(tk.Tk):
             to=13,
             increment=1,
             textvariable=self.analysis_options['bounds_filter'],
-            format='%d',
+            format='%.0f',
             width=ENTRY_WIDTH,
             justify='center'
         )
@@ -462,7 +494,7 @@ class NotNormalGUI(tk.Tk):
             to=16,
             increment=1,
             textvariable=self.analysis_options['replace_factor'],
-            format='%d',
+            format='%.0f',
             width=ENTRY_WIDTH,
             justify='center'
         )
@@ -478,7 +510,7 @@ class NotNormalGUI(tk.Tk):
             to=4,
             increment=1,
             textvariable=self.analysis_options['replace_gap'],
-            format='%d',
+            format='%.0f',
             width=ENTRY_WIDTH,
             justify='center'
         )
@@ -578,11 +610,12 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['toolbar'] = NavigationToolbar2Tk(self.widgets['analysis_view']['canvas'],
                                                                         self.windows['analysis_view_figure'],
                                                                         pack_toolbar=False)
+        self.widgets['analysis_view']['toolbar'].children['!button4'].pack_forget()
         for children in self.widgets['analysis_view']['toolbar'].winfo_children():
             children.configure(background='white')
         self.widgets['analysis_view']['toolbar'].update()
         # Progress bar
-        self.widgets['analysis_view']['progress_bar'] = ttkbootstrap.Floodgauge(
+        self.widgets['analysis_view']['progress_bar'] = Floodgauge(
             self.windows['analysis_view_figure'],
             orient=tk.HORIZONTAL,
             mode='indeterminate',
@@ -615,7 +648,7 @@ class NotNormalGUI(tk.Tk):
         # Reset analyse
         self.widgets['analysis_view']['reset_algorithm_button'] = ttk.Button(
             self.widgets['analysis_view']['reset'],
-            text="Algorithm Options",
+            text="Algorithm",
             width=2 * ENTRY_WIDTH,
             command=self.reset_algorithm,
             style='Small.secondary.Outline.TButton'
@@ -623,7 +656,7 @@ class NotNormalGUI(tk.Tk):
         # Reset analysis view
         self.widgets['analysis_view']['reset_figure_button'] = ttk.Button(
             self.widgets['analysis_view']['reset'],
-            text="Figure Options",
+            text="Figure",
             width=2 * ENTRY_WIDTH,
             command=self.reset_figure,
             style='Small.secondary.Outline.TButton'
@@ -789,7 +822,7 @@ class NotNormalGUI(tk.Tk):
             self.default_figure_options['linewidth'][key] = self.figure_options['linewidth'][key].get()
             # Colour
             self.figure_options['colour'][key] = tk.StringVar()
-            self.figure_options['colour'][key].set(colours[key])
+            self.figure_options['colour'][key].set(self.colours[key])
             self.widgets['analysis_view']['colour'][key] = ttk.Button(
                 self.widgets['analysis_view']['lines'],
                 command=partial(
@@ -982,6 +1015,23 @@ class NotNormalGUI(tk.Tk):
             if isinstance(self.default_figure_options[key], dict):
                 for sub_key in self.default_figure_options[key]:
                     self.figure_options[key][sub_key].set(self.default_figure_options[key][sub_key])
+                    if key == 'colour':
+                        colour = self.default_figure_options[key][sub_key]
+                        self.style.configure(
+                            f'{sub_key}_colour.TButton',
+                            background=colour,
+                            bordercolor=colour,
+                            lightcolor=colour,
+                            darkcolor=colour
+                        )
+                        self.style.map(
+                            f'{sub_key}_colour.TButton',
+                            background=[('active', colour)],
+                            bordercolor=[('active', colour)],
+                            lightcolor=[('active', colour)],
+                            darkcolor=[('active', colour)]
+                        )
+                        self.widgets['analysis_view']['colour'][sub_key].configure(style=f'{sub_key}_colour.TButton')
             else:
                 self.figure_options[key].set(self.default_figure_options[key])
         # Update the figure
@@ -1101,7 +1151,7 @@ class NotNormalGUI(tk.Tk):
 
             # Set visibility, colour, linewidth and linestyle
             for line in ax.get_lines():
-                if line.get_label() not in colours.keys():
+                if line.get_label() not in self.colours.keys():
                     continue
                 line.set_visible(self.figure_options['show'][line.get_label()].get())
                 line.set_color(self.figure_options['colour'][line.get_label()].get())
@@ -1139,7 +1189,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['fig'].canvas.draw()
 
     def update_figure_color(self, key):
-        colour = colorchooser.askcolor(title="Choose color")[1]
+        colour = colorchooser.askcolor(title="Choose color", initialcolor=self.figure_options['colour'][key].get())[1]
         if colour is None:
             return
 
@@ -1351,8 +1401,11 @@ class NotNormalGUI(tk.Tk):
                     table_stats[i][key] = f'({stat[key][0]}, {stat[key][1]})'
                 else:
                     table_stats[i][key] = f'{np.round(stat[key], 2):g}'
-            row_width = max([len(stat[key]) for stat in table_stats]) * 9
-            max_width[key] = row_width if row_width > len(str(key)) * 8 else len(str(key)) * 8
+            row_width = max([len(stat[key]) for stat in table_stats]) + 2
+            row_width *= self.fonts['small'].measure("0")
+            heading_width = len(str(key)) + 2
+            heading_width *= self.fonts['small_i'].measure("0")
+            max_width[key] = row_width if row_width > heading_width else heading_width
         for i, stat in enumerate(event_stats):
             table_stats[i]['Outlier'] = stat['Outlier']
 
@@ -1365,8 +1418,10 @@ class NotNormalGUI(tk.Tk):
             show='headings',
         )
         # Tags for colours
-        tree.tag_configure('outlier', background=colours['baseline'], foreground=self.style.colors.secondary)
-        tree.tag_configure('not_outlier', background='white', foreground=self.style.colors.secondary)
+        tree.tag_configure('outlier', background=self.colours['baseline'], foreground=self.style.colors.secondary,
+                           font=self.fonts['small'])
+        tree.tag_configure('not_outlier', background='white', foreground=self.style.colors.secondary,
+                           font=self.fonts['small'])
 
         # Set the headings
         for key in keys:
@@ -1376,7 +1431,7 @@ class NotNormalGUI(tk.Tk):
             tree.heading(key, anchor='center', text=key, command=lambda _col=key:
                          self.sort_column(tree, _col, False))
             if key == 'ID':
-                tree.column(key, width=max_width[key], anchor='w', stretch=0)
+                tree.column(key, width=max_width[key], anchor='w', stretch=1)
             else:
                 tree.column(key, width=max_width[key], anchor='center', stretch=0)
 
@@ -1427,23 +1482,23 @@ class NotNormalGUI(tk.Tk):
         tab.columnconfigure(0, weight=1)
         header_separator.grid(row=0, column=0, sticky="nsew")
         tab.rowconfigure(1, weight=1)
-        graph_frame.grid(row=1, column=0, sticky="nsew", pady=PADDING, padx=(0, PADDING))
+        graph_frame.grid(row=1, column=0, sticky="nsew", pady=(0, PADDING))
         footer_separator = ttk.Separator(tab, style='primary.TSeparator')
         footer_separator.grid(row=2, column=0, sticky="nsew")
 
         # Graph frame
         self.update()
-        notebook_width = (self.widgets['results']['notebook'].winfo_reqwidth() - 6 * PADDING) / 100
+        notebook_width = (self.widgets['results']['notebook'].winfo_reqwidth() - 2 * PADDING) / 100
         length = len(trace_stats[0].keys()) + len(event_stats[0].keys())
         fig = Figure(layout='constrained', dpi=100, figsize=(notebook_width, 1.5 * length))
         # Trace stats
         x = np.arange(1, len(trace_stats) + 1)
         for i, key in enumerate(trace_stats[0].keys()):
             ax = fig.add_subplot(length, 1, i + 1)
-            ax.axvline(x=len(trace_stats), color=colours['baseline'], linestyle='--', linewidth=0.5)
-            ax.plot(x, [stats[key] for stats in trace_stats], label=key, color=colours['trace'], linewidth=0.5,
-                    path_effects=[pe.Stroke(linewidth=1, foreground='black'), pe.Normal()])
-            ax.scatter(x, [stats[key] for stats in trace_stats], label=key, color=colours['threshold'],
+            ax.axvline(x=len(trace_stats), color=self.colours['baseline'], linestyle='--', linewidth=0.5)
+            ax.plot(x, [stats[key] for stats in trace_stats], label=key, color=self.colours['trace'],
+                    linewidth=0.5, path_effects=[pe.Stroke(linewidth=1, foreground='black'), pe.Normal()])
+            ax.scatter(x, [stats[key] for stats in trace_stats], label=key, color=self.colours['threshold'],
                        path_effects=[pe.Stroke(linewidth=2, foreground='black'), pe.Normal()])
             ax.set_title(key, fontsize=SMALL_FONT)
             ax.tick_params(axis='both', which='both', labelsize=SMALL_FONT - 2)
@@ -1452,10 +1507,10 @@ class NotNormalGUI(tk.Tk):
         x = np.arange(1, len(event_stats) + 1)
         for i, key in enumerate(event_stats[0].keys()):
             ax = fig.add_subplot(length, 1, i + 1 + len(trace_stats[0].keys()))
-            ax.axvline(x=len(trace_stats), color=colours['baseline'], linestyle='--', linewidth=0.5)
-            ax.plot(x, [stats[key] for stats in event_stats], label=key, color=colours['trace'], linewidth=0.5,
-                    path_effects=[pe.Stroke(linewidth=1, foreground='black'), pe.Normal()])
-            ax.scatter(x, [stats[key] for stats in event_stats], label=key, color=colours['threshold'],
+            ax.axvline(x=len(trace_stats), color=self.colours['baseline'], linestyle='--', linewidth=0.5)
+            ax.plot(x, [stats[key] for stats in event_stats], label=key, color=self.colours['trace'],
+                    linewidth=0.5, path_effects=[pe.Stroke(linewidth=1, foreground='black'), pe.Normal()])
+            ax.scatter(x, [stats[key] for stats in event_stats], label=key, color=self.colours['threshold'],
                        path_effects=[pe.Stroke(linewidth=2, foreground='black'), pe.Normal()])
             ax.set_title(key, fontsize=SMALL_FONT)
             ax.tick_params(axis='both', which='both', labelsize=SMALL_FONT - 2)
@@ -1464,6 +1519,7 @@ class NotNormalGUI(tk.Tk):
         # Margins and share x ticks
         for axis in fig.get_axes():
             axis.margins(x=0.1, y=0.1)
+            axis.format_coord = lambda x, y: ''
         for ax in fig.get_axes()[1:]:
             ax.sharex(fig.get_axes()[0])
 
@@ -1477,10 +1533,10 @@ class NotNormalGUI(tk.Tk):
                             yscrollincrement=size[1] / (length * 10))
         graph_scrollbar.config(command=inner_canvas.yview)
         # Graph frame layout
-        graph_frame.rowconfigure(0, weight=1)
-        graph_scrollbar.grid(row=0, column=0, sticky="ns")
+        graph_frame.rowconfigure(2, weight=1)
+        graph_scrollbar.grid(row=2, column=0, sticky="ns")
         graph_frame.columnconfigure(1, weight=1)
-        inner_canvas.grid(row=0, column=1, sticky="nsew", padx=PADDING)
+        inner_canvas.grid(row=2, column=1, sticky="nsew")
 
         # Inner frame inside inner canvas
         inner_frame = ttk.Frame(inner_canvas)
@@ -1488,12 +1544,15 @@ class NotNormalGUI(tk.Tk):
         # Plot inside inner frame... inside inner canvas
         canvas = FigureCanvasTkAgg(fig, inner_frame)
         # Create toolbar
-        toolbar = NavigationToolbar2Tk(canvas, inner_frame)
+        toolbar = NavigationToolbar2Tk(canvas, graph_frame, pack_toolbar=False)
+        toolbar.children['!button4'].pack_forget()
         for children in toolbar.winfo_children():
             children.configure(background='white')
         toolbar.update()
         toolbar.push_current()
-        toolbar.pack(side=tk.TOP, fill=tk.X, expand=1)
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=PADDING)
+        toolbar_separator = ttk.Separator(graph_frame)
+        toolbar_separator.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, PADDING))
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
         canvas.draw()
 

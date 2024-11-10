@@ -184,24 +184,25 @@ def parallel_iterate(
         baselines.append(result[-1][-1].baseline)
         thresholds.append(result[-1][-1].threshold)
         calculation_traces.append(result[-1][-1].calculation_trace)
-        result[-1][-1].event_coordinates[:, 0] += current_len
-        result[-1][-1].event_coordinates[:, 1] += current_len
-        event_coordinates.append(result[-1][-1].event_coordinates)
+        if result[-1][-1].event_coordinates.size != 0:
+            result[-1][-1].event_coordinates[:, 0] += current_len
+            result[-1][-1].event_coordinates[:, 1] += current_len
+            event_coordinates.append(result[-1][-1].event_coordinates)
         current_len += len(result[-1][-1].baseline)
 
     iteration.baseline = concatenate(baselines)
     iteration.threshold = concatenate(thresholds)
     iteration.calculation_trace = concatenate(calculation_traces)
     iteration.event_coordinates = concatenate(event_coordinates)
-    event_coordinates_view: cython.longlong[:, ::1] = iteration.event_coordinates
-    # recompute event stats and trace stats
-    iteration.trace_stats = trace_statistics(iteration.calculation_trace, iteration.baseline, event_coordinates_view)
-    iteration.event_stats = event_statistics(event_coordinates_view)
+    coordinates_view: cython.longlong[:, ::1] = iteration.event_coordinates
+    # recompute event stats, trace stats and over extractions
+    iteration.trace_stats = trace_statistics(iteration.calculation_trace, iteration.baseline, coordinates_view)
+    iteration.event_stats = event_statistics(coordinates_view)
     iteration.event_stats['Over Extractions'], iteration.event_stats['Significant Events'] = expected_outliers(
         trace,
         iteration.baseline,
         iteration.threshold,
-        event_coordinates_view,
+        coordinates_view,
         z_score
     )
 
@@ -360,7 +361,7 @@ def initial_estimate(
     # Determine the starting direction
     results.event_direction = 'up' if results.trace_stats['Influence'] > 0 else 'down'
 
-    # # First extraction
+    # First extraction
     results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
                                               results.event_direction)
     results.event_stats = event_statistics(results.event_coordinates)
@@ -547,7 +548,7 @@ def trace_statistics(
     with catch_warnings():
         filterwarnings('ignore')
         simplefilter('ignore')
-        results['Overall Statistic'] = shapiro(adjusted).statistic
+        #results['Overall Statistic'] = shapiro(adjusted).statistic
         results['Positive Statistic'] = shapiro(adjusted[where(adjusted > percentile(adjusted, 75))]).statistic
         results['Negative Statistic'] = shapiro(adjusted[where(adjusted < percentile(adjusted, 25))]).statistic
         results['Influence'] = results['Negative Statistic'] - results['Positive Statistic']
