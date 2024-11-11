@@ -187,16 +187,17 @@ class NotNormalGUI(tk.Tk):
             'events': '#2dbd86'
         }
         # Initialise the font
+        family = 'Helvetica'
         self.fonts = {
-            'small': Font(family='Helvetica', name='small', size=SMALL_FONT, weight='normal', slant='roman'),
-            'small_i': Font(family='Helvetica', name='small_i', size=SMALL_FONT, weight='normal', slant='italic'),
-            'small_b': Font(family='Helvetica', name='small_b', size=SMALL_FONT, weight='bold', slant='roman'),
-            'medium': Font(family='Helvetica', name='medium', size=MEDIUM_FONT, weight='normal', slant='roman'),
-            'medium_i': Font(family='Helvetica', name='medium_i', size=MEDIUM_FONT, weight='normal', slant='italic'),
-            'medium_b': Font(family='Helvetica', name='medium_b', size=MEDIUM_FONT, weight='bold', slant='roman'),
-            'large': Font(family='Helvetica', name='large', size=LARGE_FONT, weight='normal', slant='roman'),
-            'large_i': Font(family='Helvetica', name='large_i', size=LARGE_FONT, weight='normal', slant='italic'),
-            'large_b': Font(family='Helvetica', name='large_b', size=LARGE_FONT, weight='bold', slant='roman')
+            'small': Font(family=family, name='small', size=SMALL_FONT, weight='normal', slant='roman'),
+            'small_i': Font(family=family, name='small_i', size=SMALL_FONT, weight='normal', slant='italic'),
+            'small_b': Font(family=family, name='small_b', size=SMALL_FONT, weight='bold', slant='roman'),
+            'medium': Font(family=family, name='medium', size=MEDIUM_FONT, weight='normal', slant='roman'),
+            'medium_i': Font(family=family, name='medium_i', size=MEDIUM_FONT, weight='normal', slant='italic'),
+            'medium_b': Font(family=family, name='medium_b', size=MEDIUM_FONT, weight='bold', slant='roman'),
+            'large': Font(family=family, name='large', size=LARGE_FONT, weight='normal', slant='roman'),
+            'large_i': Font(family=family, name='large_i', size=LARGE_FONT, weight='normal', slant='italic'),
+            'large_b': Font(family=family, name='large_b', size=LARGE_FONT, weight='bold', slant='roman')
         }
         # Initialise the style
         self.style.configure('.', font=self.fonts['small'])
@@ -228,7 +229,7 @@ class NotNormalGUI(tk.Tk):
         # Misc
         self.style.configure('Horizontal.TFloodgauge', thickness=30, barsize=60)
         # Matplotlib
-        rc('font', size=SMALL_FONT)
+        rc('font', size=SMALL_FONT, family='sans-serif')
 
     def init_layout(self):
         # Main window
@@ -590,7 +591,7 @@ class NotNormalGUI(tk.Tk):
         # Layout
         self.windows['analysis_view'].columnconfigure(0, weight=1)
         self.widgets['analysis_view']['title'].grid(row=0, column=0, sticky="nsew", pady=(WINDOW_PADDING, 0))
-        self.windows['analysis_view'].rowconfigure(1, weight=2)
+        self.windows['analysis_view'].rowconfigure(1, weight=3)
         self.windows['analysis_view_figure'].grid(row=1, column=0, sticky="nsew", padx=WINDOW_PADDING,
                                                   pady=WINDOW_PADDING)
         self.widgets['analysis_view']['options_toggle'].grid(row=2, column=0, sticky="ew")
@@ -633,9 +634,6 @@ class NotNormalGUI(tk.Tk):
         # Lines labelframe
         self.widgets['analysis_view']['lines'] = ttk.LabelFrame(self.windows['analysis_view_options'], text="Lines",
                                                                 style='secondary.TLabelframe', labelanchor='n')
-        # General table options
-        self.widgets['analysis_view']['reset_label'] = ttk.Label(self.widgets['analysis_view']['general'],
-                                                                 text="Reset")
 
         # Reset all
         self.widgets['analysis_view']['reset_all_button'] = ttk.Button(
@@ -671,7 +669,7 @@ class NotNormalGUI(tk.Tk):
         )
         # Parallel option
         self.widgets['analysis_view']['parallel_label'] = ttk.Label(self.widgets['analysis_view']['general'],
-                                                                    text="Parallel Compute")
+                                                                    text="Parallel")
         self.analysis_options['parallel'] = tk.BooleanVar()
         self.analysis_options['parallel'].set(True)
         self.widgets['analysis_view']['parallel'] = ttk.Checkbutton(
@@ -883,7 +881,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['reset'].grid(row=0, column=0, sticky="nsew", padx=PADDING, pady=PADDING)
         self.windows['analysis_view_options'].columnconfigure(1, weight=1)
         self.widgets['analysis_view']['general'].grid(row=0, column=1, sticky="nsew", padx=0, pady=PADDING)
-        self.windows['analysis_view_options'].columnconfigure(2, weight=1)
+        self.windows['analysis_view_options'].columnconfigure(2, weight=4)
         self.widgets['analysis_view']['lines'].grid(row=0, column=2, sticky="nsew", padx=PADDING, pady=PADDING)
         # Reset layout
         self.widgets['analysis_view']['reset'].columnconfigure(0, weight=1, uniform='options')
@@ -1110,36 +1108,36 @@ class NotNormalGUI(tk.Tk):
                 else:
                     lines.remove()
 
-            time_vector = self.time_vector[lower:upper + 1]
             # Plot the trace
-            if type(self.trace) is np.ndarray and replot_trace:
-                ax.plot(time_vector, self.trace[lower:upper + 1], label='trace')
+            if type(self.trace) is np.ndarray and replot_trace and self.figure_options['show']['trace'].get():
+                ax.plot(self.time_vector[lower:upper + 1], self.trace[lower:upper + 1], label='trace', zorder=1)
 
             # Plot the calculation trace
-            if type(self.calculation_trace) is np.ndarray:
-                ax.plot(time_vector, self.calculation_trace[lower:upper + 1],
-                        label='calculation_trace')
+            if type(self.calculation_trace) is np.ndarray and self.figure_options['show']['calculation_trace'].get():
+                ax.plot(self.time_vector[lower:upper + 1], self.calculation_trace[lower:upper + 1],
+                        label='calculation_trace', zorder=2)
 
             # Plot the filtered trace
-            if type(self.filtered_trace) is np.ndarray:
-                ax.plot(time_vector, self.filtered_trace[lower:upper + 1],
-                        label='filtered_trace')
+            if type(self.filtered_trace) is np.ndarray and self.figure_options['show']['filtered_trace'].get():
+                ax.plot(self.time_vector[lower:upper + 1], self.filtered_trace[lower:upper + 1], label='filtered_trace',
+                        zorder=3)
 
             # Plot the baseline
-            if type(self.baseline) is np.ndarray:
-                ax.plot(time_vector, self.baseline[lower:upper + 1], label='baseline')
+            if type(self.baseline) is np.ndarray and self.figure_options['show']['baseline'].get():
+                ax.plot(self.time_vector[lower:upper + 1], self.baseline[lower:upper + 1], label='baseline', zorder=4)
 
-                # Plot the threshold
-                if type(self.threshold) is np.ndarray:
-                    ax.plot(time_vector, self.baseline[lower:upper + 1] + self.threshold[lower:upper + 1],
-                            label='threshold')
-                    ax.plot(time_vector, self.baseline[lower:upper + 1] - self.threshold[lower:upper + 1],
-                            label='threshold')
+            # Plot the threshold
+            if (type(self.threshold) is np.ndarray and type(self.baseline) is np.ndarray and
+                    self.figure_options['show']['threshold'].get()):
+                ax.plot(self.time_vector[lower:upper + 1], self.baseline[lower:upper + 1] +
+                        self.threshold[lower:upper + 1], label='threshold', zorder=5)
+                ax.plot(self.time_vector[lower:upper + 1], self.baseline[lower:upper + 1] -
+                        self.threshold[lower:upper + 1], label='threshold', zorder=5)
 
             # Plot the events
-            xlist = []
-            ylist = []
-            if type(self.event_coordinates) is np.ndarray:
+            if type(self.event_coordinates) is np.ndarray and self.figure_options['show']['events'].get():
+                xlist = []
+                ylist = []
                 for event in self.event_coordinates:
                     if event[0] < lower or event[1] > upper:
                         continue
@@ -1147,13 +1145,12 @@ class NotNormalGUI(tk.Tk):
                     xlist.append(None)
                     ylist.extend(self.trace[event[0]:event[1] + 1])
                     ylist.append(None)
-                ax.plot(xlist, ylist, label='events')
+                ax.plot(xlist, ylist, label='events', zorder=6)
 
             # Set visibility, colour, linewidth and linestyle
             for line in ax.get_lines():
                 if line.get_label() not in self.colours.keys():
                     continue
-                line.set_visible(self.figure_options['show'][line.get_label()].get())
                 line.set_color(self.figure_options['colour'][line.get_label()].get())
                 line.set_linewidth(self.figure_options['linewidth'][line.get_label()].get())
                 line.set_linestyle(self.figure_options['style'][line.get_label()].get())
@@ -1172,20 +1169,66 @@ class NotNormalGUI(tk.Tk):
             ax.set_title(title, fontsize=LARGE_FONT)
 
         # Set grid
+        ax.set_xlabel("Time (s)", fontsize=MEDIUM_FONT)
+        ax.set_ylabel("Current", fontsize=MEDIUM_FONT)
         ax.grid(self.figure_options['grid'].get())
         self.widgets['analysis_view']['canvas'].draw()
 
     def update_figure_show(self, key):
-        if not self.widgets['analysis_view']['fig'].axes:
+        # Check if the figure is initialised
+        if self.widgets['analysis_view']['fig'].axes:
+            ax = self.widgets['analysis_view']['fig'].axes[0]
+        else:
+            return
+
+        # Check if time vector and time step are initialised
+        if type(self.time_vector) is not np.ndarray or not self.time_step:
             return
 
         show = self.figure_options['show'][key].get()
-        lines = self.widgets['analysis_view']['fig'].axes[0].get_lines()
-        for line in lines:
-            if key == line.get_label():
-                if show == line.get_visible():
-                    continue
-                line.set_visible(show)
+        if not show:
+            lines = ax.get_lines()
+            for line in lines:
+                if key == line.get_label():
+                    line.remove()
+        else:
+            lower = int(np.round((self.figure_options['x_limit_lower'].get() - self.time_vector[0]) / self.time_step))
+            upper = int(np.round((self.figure_options['x_limit_upper'].get() - self.time_vector[0]) / self.time_step))
+            colour = self.figure_options['colour'][key].get()
+            linewidth = self.figure_options['linewidth'][key].get()
+            style = self.figure_options['style'][key].get()
+            match key:
+                case 'trace' if type(self.trace) is np.ndarray:
+                    ax.plot(self.time_vector[lower:upper + 1], self.trace[lower:upper + 1], label='trace',
+                            color=colour, linewidth=linewidth, linestyle=style, zorder=1)
+                case 'calculation_trace' if type(self.calculation_trace) is np.ndarray:
+                    ax.plot(self.time_vector[lower:upper + 1], self.calculation_trace[lower:upper + 1],
+                            label='calculation_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=2)
+                case 'filtered_trace' if type(self.filtered_trace) is np.ndarray:
+                    ax.plot(self.time_vector[lower:upper + 1], self.filtered_trace[lower:upper + 1],
+                            label='filtered_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=3)
+                case 'baseline' if type(self.baseline) is np.ndarray:
+                    ax.plot(self.time_vector[lower:upper + 1], self.baseline[lower:upper + 1],
+                            label='baseline', color=colour, linewidth=linewidth, linestyle=style, zorder=4)
+                case 'threshold' if type(self.threshold) is np.ndarray and type(self.baseline) is np.ndarray:
+                    ax.plot(self.time_vector[lower:upper + 1],
+                            self.baseline[lower:upper + 1] + self.threshold[lower:upper + 1], label='threshold',
+                            color=colour, linewidth=linewidth, linestyle=style, zorder=5)
+                    ax.plot(self.time_vector[lower:upper + 1],
+                            self.baseline[lower:upper + 1] - self.threshold[lower:upper + 1], label='threshold',
+                            color=colour, linewidth=linewidth, linestyle=style, zorder=5)
+                case 'events' if type(self.event_coordinates) is np.ndarray:
+                    xlist = []
+                    ylist = []
+                    for event in self.event_coordinates:
+                        if event[0] < lower or event[1] > upper:
+                            continue
+                        xlist.extend(self.time_vector[event[0]:event[1] + 1])
+                        xlist.append(None)
+                        ylist.extend(self.trace[event[0]:event[1] + 1])
+                        ylist.append(None)
+                    ax.plot(xlist, ylist, label='events', color=colour, linewidth=linewidth, linestyle=style, zorder=6)
+
         self.widgets['analysis_view']['fig'].canvas.draw()
 
     def update_figure_color(self, key):
@@ -1487,8 +1530,10 @@ class NotNormalGUI(tk.Tk):
         footer_separator.grid(row=2, column=0, sticky="nsew")
 
         # Graph frame
-        self.update()
-        notebook_width = (self.widgets['results']['notebook'].winfo_reqwidth() - 2 * PADDING) / 100
+        if self.widgets['results']['notebook'].tabs():
+            notebook_width = (self.widgets['results']['notebook'].winfo_reqwidth() - 2 * PADDING) / 100
+        else:
+            notebook_width = (self.width // 6 - 2 * PADDING) / 100
         length = len(trace_stats[0].keys()) + len(event_stats[0].keys())
         fig = Figure(layout='constrained', dpi=100, figsize=(notebook_width, 1.5 * length))
         # Trace stats
@@ -1519,7 +1564,7 @@ class NotNormalGUI(tk.Tk):
         # Margins and share x ticks
         for axis in fig.get_axes():
             axis.margins(x=0.1, y=0.1)
-            axis.format_coord = lambda x, y: ''
+            axis.format_coord = lambda x, y: f'y = {y:.4f}'
         for ax in fig.get_axes()[1:]:
             ax.sharex(fig.get_axes()[0])
 
@@ -1720,25 +1765,6 @@ class NotNormalGUI(tk.Tk):
 
     def toolbar_key_press(self, figure_id, event):
         key_press_handler(event, self.widgets[figure_id]['canvas'], self.widgets[figure_id]['toolbar'])
-
-    def check_cutoff(self, cutoff):
-        if not self.flags['loaded']:
-            return
-
-        # Show the initial estimate
-        self.baseline = nn.baseline_filter(
-            self.trace,
-            cutoff,
-            1 / self.time_step
-        )
-        self.update_figure(title=f'Cutoff = {cutoff}')
-
-    def check_filtered(self):
-        if not self.flags['loaded']:
-            return
-
-        # Show the initial estimate
-        self.filtered_trace = nn.bounds_filter(self.trace, self.analysis_options['bounds_filter'].get())
 
     def process_results(self, results):
         if isinstance(results, list):
