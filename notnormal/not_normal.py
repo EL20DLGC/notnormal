@@ -56,7 +56,7 @@ def not_normal(
         replace_factor (int): Factor for replacing events in the calculation trace. Default is 8.
         replace_gap (int): Gap for replacing events in the calculation trace. Default is 2.
         threshold_window (float): Window size for threshold calculation. Default is 2.0.
-        z_score (float): Z-score for event detection. If None, it is calculated based on the trace length.
+        z_score (float, optional): Z-score for event detection. If None, it is calculated based on the trace length.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
         parallel (bool): Whether to run the iteration in parallel. Default is False.
 
@@ -131,7 +131,7 @@ def parallel_iterate(
         threshold_window (float): Window size for threshold calculation.
         z_score (float): Z-score for event detection.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
-        segment_size (int): Size of segments for parallel processing. Default is None and will calculate automatically.
+        segment_size (int, optional): Size of segments for parallel processing. Default is None and will calculate automatically.
 
     Returns:
         tuple: A tuple containing event coordinates, baseline, and iteration results.
@@ -364,6 +364,22 @@ def initial_estimate(
     # First extraction
     results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
                                               results.event_direction)
+    # temp
+    results.event_coordinates = sort_coordinates(trace, results.baseline, results.event_coordinates)
+    results.calculation_trace = event_replacer(trace, results.baseline, results.event_coordinates, 8, 2)
+
+    results.baseline = baseline_filter(results.calculation_trace, cutoff, sample_rate)
+    results.threshold = thresholder(results.calculation_trace, results.baseline, z_score, int(threshold_window * sample_rate))
+    results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
+                                              'up' if results.event_direction == 'down' else 'down')
+    results.event_coordinates = sort_coordinates(trace, results.baseline, results.event_coordinates)
+    results.calculation_trace = event_replacer(results.calculation_trace, results.baseline, results.event_coordinates, 8, 2)
+
+    results.baseline = baseline_filter(results.calculation_trace, cutoff, sample_rate)
+    results.threshold = thresholder(results.calculation_trace, results.baseline, z_score, int(threshold_window * sample_rate))
+    results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
+                                              'biphasic')
+
     results.event_stats = event_statistics(results.event_coordinates)
 
     # Calculate the required cutoffs
@@ -391,7 +407,7 @@ def expected_outliers(
         trace: ndarray,
         baseline: ndarray,
         threshold: ndarray,
-        event_coordinates:  cython.longlong[:, ::1],
+        event_coordinates: cython.longlong[:, ::1],
         z_score: cython.double
 ) -> tuple:
     """
@@ -521,7 +537,7 @@ def trace_statistics(
     Args:
         trace (ndarray): The input signal trace.
         baseline (ndarray): The baseline of the trace.
-        event_coordinates (ndarray): The coordinates of detected events. Default is None.
+        event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
 
     Returns:
         dict: A dictionary containing trace statistics.
@@ -629,8 +645,8 @@ def calculate_cutoffs(
     damping_ratio: cython.double
     for event_id in range(event_number):
         event_start = event_coordinates[event_id, 0]
-        event_end = event_coordinates[event_id, 1] + 1
-        vector = abs(adjusted[event_start:event_end])
+        event_end = event_coordinates[event_id, 1]
+        vector = abs(adjusted[event_start:event_end + 1])
         damping_ratio = (max(vector) / (max(vector) - threshold[event_end]))
         # -3dB of boxcar by length
         max_cutoffs_view[event_id] = 0.442947 / (sqrt((len(vector) * damping_ratio) ** 2 - 1) * (1 / sample_rate))
@@ -910,8 +926,8 @@ def thresholder(
         trace (ndarray): The input signal trace.
         baseline (ndarray): The baseline of the trace.
         z_score (float): The Z-score for event detection.
-        window (int): The window size in samples for threshold calculation. Default is None.
-        event_coordinates (ndarray): The coordinates of detected events. Default is None.
+        window (int, optional): The window size in samples for threshold calculation. Default is None.
+        event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
         method (str): The method for threshold calculation ('iqr' or 'std'). Default is 'iqr'.
 
     Returns:

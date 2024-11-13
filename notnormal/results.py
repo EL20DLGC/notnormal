@@ -17,7 +17,7 @@ class Events:
 
     Attributes:
         label (str): The label for the events.
-        events (list[dict]): A list of event dictionaries. Default is None.
+        events (list[dict], optional): A list of event dictionaries. Default is None.
     """
 
     label: str
@@ -126,14 +126,14 @@ class Iteration:
         label (str): The label for the iteration.
         args (dict): The arguments used in the iteration.
         trace (ndarray, optional): The input signal trace. Default is None.
-        filtered_trace (ndarray): The filtered version of the input trace. Default is None.
-        baseline (ndarray): The baseline of the trace. Default is None.
-        threshold (ndarray): The threshold for event detection. Default is None.
-        calculation_trace (ndarray): The trace used for calculations. Default is None.
-        trace_stats (dict): Statistics for the trace. Default is None.
-        event_coordinates (ndarray): The coordinates of detected events. Default is None.
-        event_stats (dict): Statistics for the detected events. Default is None.
-        events (Events): The events detected in the iteration. Default is None.
+        filtered_trace (ndarray, optional): The filtered version of the input trace. Default is None.
+        baseline (ndarray, optional): The baseline of the trace. Default is None.
+        threshold (ndarray, optional): The threshold for event detection. Default is None.
+        calculation_trace (ndarray, optional): The trace used for calculations. Default is None.
+        trace_stats (dict, optional): Statistics for the trace. Default is None.
+        event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
+        event_stats (dict, optional): Statistics for the detected events. Default is None.
+        events (Events, optional): The events detected in the iteration. Default is None.
     """
 
     label: str

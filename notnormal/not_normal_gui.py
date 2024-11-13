@@ -16,9 +16,7 @@ from threading import Thread
 from tkinter import ttk, colorchooser, messagebox
 from tkinter.font import Font
 import numpy as np
-import pandas as pd
 import pyabf
-from PIL import Image, ImageTk
 from matplotlib import patheffects as pe, rc
 from matplotlib.backend_bases import key_press_handler
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -59,8 +57,7 @@ class NotNormalGUI(tk.Tk):
             self.image = os.path.join(sys._MEIPASS, 'data', 'landing_page.png')
         else:
             self.image = os.path.join(__file__, '..', 'data', 'landing_page.png')
-        photoimage = ImageTk.PhotoImage(Image.open(self.image))
-        self.iconphoto(True, photoimage)
+        self.iconphoto(True, tk.PhotoImage(file=self.image))
         # Background
         self.configure(bg="black")
         # Root window size and resizability
@@ -142,7 +139,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['landing']['frame'].rowconfigure(0, weight=1)
         self.widgets['landing']['inner'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING,
                                               pady=WINDOW_PADDING)
-        photoimage = ImageTk.PhotoImage(Image.open(self.image))
+        photoimage = tk.PhotoImage(file=self.image)
         self.widgets['landing']['image'] = tk.Label(self.widgets['landing']['inner'], image=photoimage)
         self.widgets['landing']['image'].image = photoimage
         self.widgets['landing']['button'] = ttk.Button(self.widgets['landing']['inner'], text="Browse", underline=0,
@@ -1197,37 +1194,36 @@ class NotNormalGUI(tk.Tk):
             colour = self.figure_options['colour'][key].get()
             linewidth = self.figure_options['linewidth'][key].get()
             style = self.figure_options['style'][key].get()
-            match key:
-                case 'trace' if type(self.trace) is np.ndarray:
-                    ax.plot(self.time_vector[lower:upper + 1], self.trace[lower:upper + 1], label='trace',
-                            color=colour, linewidth=linewidth, linestyle=style, zorder=1)
-                case 'calculation_trace' if type(self.calculation_trace) is np.ndarray:
-                    ax.plot(self.time_vector[lower:upper + 1], self.calculation_trace[lower:upper + 1],
-                            label='calculation_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=2)
-                case 'filtered_trace' if type(self.filtered_trace) is np.ndarray:
-                    ax.plot(self.time_vector[lower:upper + 1], self.filtered_trace[lower:upper + 1],
-                            label='filtered_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=3)
-                case 'baseline' if type(self.baseline) is np.ndarray:
-                    ax.plot(self.time_vector[lower:upper + 1], self.baseline[lower:upper + 1],
-                            label='baseline', color=colour, linewidth=linewidth, linestyle=style, zorder=4)
-                case 'threshold' if type(self.threshold) is np.ndarray and type(self.baseline) is np.ndarray:
-                    ax.plot(self.time_vector[lower:upper + 1],
-                            self.baseline[lower:upper + 1] + self.threshold[lower:upper + 1], label='threshold',
-                            color=colour, linewidth=linewidth, linestyle=style, zorder=5)
-                    ax.plot(self.time_vector[lower:upper + 1],
-                            self.baseline[lower:upper + 1] - self.threshold[lower:upper + 1], label='threshold',
-                            color=colour, linewidth=linewidth, linestyle=style, zorder=5)
-                case 'events' if type(self.event_coordinates) is np.ndarray:
-                    xlist = []
-                    ylist = []
-                    for event in self.event_coordinates:
-                        if event[0] < lower or event[1] > upper:
-                            continue
-                        xlist.extend(self.time_vector[event[0]:event[1] + 1])
-                        xlist.append(None)
-                        ylist.extend(self.trace[event[0]:event[1] + 1])
-                        ylist.append(None)
-                    ax.plot(xlist, ylist, label='events', color=colour, linewidth=linewidth, linestyle=style, zorder=6)
+            if key == 'trace' and type(self.trace) is np.ndarray:
+                ax.plot(self.time_vector[lower:upper + 1], self.trace[lower:upper + 1], label='trace',
+                        color=colour, linewidth=linewidth, linestyle=style, zorder=1)
+            elif key == 'calculation_trace' and type(self.calculation_trace) is np.ndarray:
+                ax.plot(self.time_vector[lower:upper + 1], self.calculation_trace[lower:upper + 1],
+                        label='calculation_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=2)
+            elif 'filtered_trace' and type(self.filtered_trace) is np.ndarray:
+                ax.plot(self.time_vector[lower:upper + 1], self.filtered_trace[lower:upper + 1],
+                        label='filtered_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=3)
+            elif key == 'baseline' and type(self.baseline) is np.ndarray:
+                ax.plot(self.time_vector[lower:upper + 1], self.baseline[lower:upper + 1],
+                        label='baseline', color=colour, linewidth=linewidth, linestyle=style, zorder=4)
+            elif key == 'threshold' and type(self.threshold) is np.ndarray and type(self.baseline) is np.ndarray:
+                ax.plot(self.time_vector[lower:upper + 1],
+                        self.baseline[lower:upper + 1] + self.threshold[lower:upper + 1], label='threshold',
+                        color=colour, linewidth=linewidth, linestyle=style, zorder=5)
+                ax.plot(self.time_vector[lower:upper + 1],
+                        self.baseline[lower:upper + 1] - self.threshold[lower:upper + 1], label='threshold',
+                        color=colour, linewidth=linewidth, linestyle=style, zorder=5)
+            elif key == 'events' and type(self.event_coordinates) is np.ndarray:
+                xlist = []
+                ylist = []
+                for event in self.event_coordinates:
+                    if event[0] < lower or event[1] > upper:
+                        continue
+                    xlist.extend(self.time_vector[event[0]:event[1] + 1])
+                    xlist.append(None)
+                    ylist.extend(self.trace[event[0]:event[1] + 1])
+                    ylist.append(None)
+                ax.plot(xlist, ylist, label='events', color=colour, linewidth=linewidth, linestyle=style, zorder=6)
 
         self.widgets['analysis_view']['fig'].canvas.draw()
 
@@ -1828,9 +1824,19 @@ class NotNormalGUI(tk.Tk):
                 time_vector = data.sweepX.astype(float)
             # Separated format
             elif path.endswith('.csv') or path.endswith('.tsv') or path.endswith('.txt') or path.endswith('.dat'):
-                data = pd.read_csv(path, sep=None, engine='python')
-                trace = np.array(data[data.keys()[1]], dtype=float)
-                time_vector = np.array(data[data.keys()[0]], dtype=float)
+                with open(path, newline='') as csvfile:
+                    dialect = csv.Sniffer().sniff(csvfile.read(1024))
+                    csvfile.seek(0)
+                    reader = csv.reader(csvfile, dialect)
+                    next(reader)
+                    trace = []
+                    time_vector = []
+                    for row in reader:
+                        trace.append(row[1])
+                        time_vector.append(row[0])
+                    trace = np.asarray(trace, dtype=float)
+                    time_vector = np.asarray(time_vector, dtype=float)
+
             else:
                 raise ValueError('File type not supported')
             time_step = time_vector[1] - time_vector[0]

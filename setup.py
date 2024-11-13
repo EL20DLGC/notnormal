@@ -37,13 +37,11 @@ setup(
         "ttkbootstrap",
         "matplotlib",
         "pyabf",
-        "pandas",
-        "Pillow",
         "Cython"
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',
-        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
         'Intended Audience :: Science/Research'
     ],
     include_package_data=True,
@@ -60,7 +58,8 @@ setup(
         compiler_directives={
             'language_level': 3,
         },
-        show_all_warnings=True,
-        annotate=True,
+        quiet=True,
+        show_all_warnings=False,
+        annotate=False,
     )
 )
