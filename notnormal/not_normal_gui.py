@@ -55,9 +55,12 @@ class NotNormalGUI(tk.Tk):
         # Icon
         if hasattr(sys, '_MEIPASS'):
             self.image = os.path.join(sys._MEIPASS, 'data', 'landing_page.png')
+            self.icon = os.path.join(sys._MEIPASS, 'data', 'logo.ico')
         else:
             self.image = os.path.join(__file__, '..', 'data', 'landing_page.png')
-        self.iconphoto(True, tk.PhotoImage(file=self.image))
+            self.image = os.path.join(__file__, '..', 'data', 'logo.png')
+            self.icon = os.path.join(__file__, '..', 'data', 'logo.ico')
+        self.iconbitmap(True, self.icon)
         # Background
         self.configure(bg="black")
         # Root window size and resizability
@@ -140,6 +143,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['landing']['inner'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING,
                                               pady=WINDOW_PADDING)
         photoimage = tk.PhotoImage(file=self.image)
+        photoimage = photoimage.subsample(2, 2)
         self.widgets['landing']['image'] = tk.Label(self.widgets['landing']['inner'], image=photoimage)
         self.widgets['landing']['image'].image = photoimage
         self.widgets['landing']['button'] = ttk.Button(self.widgets['landing']['inner'], text="Browse", underline=0,
@@ -1200,7 +1204,7 @@ class NotNormalGUI(tk.Tk):
             elif key == 'calculation_trace' and type(self.calculation_trace) is np.ndarray:
                 ax.plot(self.time_vector[lower:upper + 1], self.calculation_trace[lower:upper + 1],
                         label='calculation_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=2)
-            elif 'filtered_trace' and type(self.filtered_trace) is np.ndarray:
+            elif key == 'filtered_trace' and type(self.filtered_trace) is np.ndarray:
                 ax.plot(self.time_vector[lower:upper + 1], self.filtered_trace[lower:upper + 1],
                         label='filtered_trace', color=colour, linewidth=linewidth, linestyle=style, zorder=3)
             elif key == 'baseline' and type(self.baseline) is np.ndarray:
