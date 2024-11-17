@@ -1,4 +1,4 @@
 include LICENSE
-include version.py
-recursive-include notnormal *.py
+include README.md
 recursive-include docs *
+recursive-include notnormal *.py

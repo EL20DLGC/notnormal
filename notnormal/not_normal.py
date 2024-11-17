@@ -77,6 +77,8 @@ def not_normal(
         filtered_trace,
         sample_rate,
         estimate_cutoff,
+        replace_factor,
+        replace_gap,
         threshold_window,
         z_score
     )
@@ -289,6 +291,16 @@ def iterate(
 
         i += 1
 
+    # Now that all events are surely removed, the calculation trace IS the baseline at event locations
+    coordinate_view: cython.longlong[:, ::1] = results[-1].event_coordinates
+    baseline_view: cython.double[::1] = baseline
+    calculation_trace_view: cython.double[::1] = calculation_trace
+    event_id: cython.size_t
+    event_number: cython.size_t = len(coordinate_view)
+    for event_id in range(event_number):
+        baseline_view[coordinate_view[event_id, 0] + 1:coordinate_view[event_id, 1]] = (
+            calculation_trace_view[coordinate_view[event_id, 0] + 1:coordinate_view[event_id, 1]])
+
     # Final compute threshold using std as it is more accurate when outliers are no longer present
     threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate),
                             results[-1].event_coordinates, method='std')
@@ -320,6 +332,8 @@ def initial_estimate(
         filtered_trace: ndarray,
         sample_rate: cython.int,
         cutoff: cython.double,
+        replace_factor: cython.double,
+        replace_gap: cython.double,
         threshold_window: cython.double,
         z_score: cython.double,
 ) -> tuple:
@@ -332,6 +346,8 @@ def initial_estimate(
         filtered_trace (ndarray): The filtered version of the input trace.
         sample_rate (int): The sample rate of the trace.
         cutoff (float): The initial estimate for the cutoff frequency.
+        replace_factor (int): Factor for replacing events in the calculation trace.
+        replace_gap (int): Gap for replacing events in the calculation trace.
         threshold_window (float): The window size for threshold calculation.
         z_score (float): The Z-score for event detection.
 
@@ -346,48 +362,41 @@ def initial_estimate(
         label='Estimate',
         args=dict(sample_rate=sample_rate, cutoff=cutoff, threshold_window=threshold_window, z_score=z_score),
         trace=trace,
-        filtered_trace=filtered_trace,
-        calculation_trace=trace,
+        filtered_trace=filtered_trace
     )
 
-    # Initial baseline and threshold
+    # (1) Remove events from the side of most influence
     trace_view: cython.double[::1] = trace
-    results.baseline = baseline_filter(trace_view, cutoff, sample_rate)
-    results.threshold = thresholder(trace, results.baseline, z_score, int(threshold_window * sample_rate))
-
-    # Calculate trace statistics
-    results.trace_stats = trace_statistics(trace, results.baseline)
-
-    # Determine the starting direction
+    baseline = baseline_filter(trace_view, cutoff, sample_rate)
+    threshold = thresholder(trace, baseline, z_score, int(threshold_window * sample_rate))
+    # Calculate trace statistics to determine the starting direction (most influence)
+    results.trace_stats = trace_statistics(trace, baseline)
     results.event_direction = 'up' if results.trace_stats['Influence'] > 0 else 'down'
+    # Locate and replace events
+    event_coordinates: cython.longlong[:, ::1] = locate_events(trace, filtered_trace, baseline, threshold,
+                                                               results.event_direction)
+    event_coordinates: cython.longlong[:, ::1]  = sort_coordinates(trace, baseline, event_coordinates)
+    calculation_trace = event_replacer(trace_view, baseline, event_coordinates, replace_factor, replace_gap)
 
-    # First extraction
-    results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
-                                              results.event_direction)
-    # temp
-    results.event_coordinates = sort_coordinates(trace, results.baseline, results.event_coordinates)
-    results.calculation_trace = event_replacer(trace, results.baseline, results.event_coordinates, 8, 2)
+    # (2) Remove events from the opposite side
+    baseline = baseline_filter(calculation_trace, cutoff, sample_rate)
+    threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate))
+    event_coordinates: cython.longlong[:, ::1] = locate_events(trace, filtered_trace, baseline, threshold,
+                                                               'up' if results.event_direction == 'down' else 'down')
+    event_coordinates: cython.longlong[:, ::1] = sort_coordinates(trace, baseline, event_coordinates)
+    results.calculation_trace = event_replacer(calculation_trace, baseline, event_coordinates, replace_factor,
+                                               replace_gap)
 
+    # (3) Final extraction now both sides are removed
     results.baseline = baseline_filter(results.calculation_trace, cutoff, sample_rate)
-    results.threshold = thresholder(results.calculation_trace, results.baseline, z_score, int(threshold_window * sample_rate))
-    results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
-                                              'up' if results.event_direction == 'down' else 'down')
-    results.event_coordinates = sort_coordinates(trace, results.baseline, results.event_coordinates)
-    results.calculation_trace = event_replacer(results.calculation_trace, results.baseline, results.event_coordinates, 8, 2)
-
-    results.baseline = baseline_filter(results.calculation_trace, cutoff, sample_rate)
-    results.threshold = thresholder(results.calculation_trace, results.baseline, z_score, int(threshold_window * sample_rate))
-    results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,
-                                              'biphasic')
-
+    results.threshold = thresholder(results.calculation_trace, results.baseline, z_score,
+                                    int(threshold_window * sample_rate))
+    results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,'biphasic')
     results.event_stats = event_statistics(results.event_coordinates)
 
-    # Calculate the required cutoffs
-    threshold_view: cython.double[::1] = results.threshold
-    coordinates_view: cython.longlong[:, ::1] = results.event_coordinates
-    max_cutoffs: cython.double[::1] = calculate_cutoffs(trace, results.baseline, threshold_view, coordinates_view,
-                                                        cutoff, sample_rate)
-
+    # (4) Calculate the required cutoffs
+    max_cutoffs = calculate_cutoffs(trace, results.baseline, results.threshold, results.event_coordinates, cutoff,
+                                    sample_rate)
     # Q1 of the required cutoffs, original needs to be added on top
     calculated_cutoff: cython.double
     try:
@@ -792,13 +801,13 @@ def locate_events(
     # Iterate to find bounds
     event_coordinates = event_bounds(threshold_idxs, baseline_idxs)
 
-    return event_coordinates
+    return asarray(event_coordinates, dtype=int64)
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
-def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.longlong[::1]) -> ndarray:
+def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.longlong[::1]) -> cython.longlong[:, ::1]:
     """
     Determine the bounds of events based on threshold and baseline crossing indices.
 
@@ -814,7 +823,8 @@ def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.lon
     spike_end: cython.size_t = 0
     i: cython.size_t
     baseline_idxs_length: cython.size_t = len(baseline_idxs)
-    event_coordinates = []
+    j: cython.size_t = 0
+    event_coordinates: cython.longlong[:, ::1] = zeros((len(threshold_idxs), 2), dtype=int64)
     # Iterate through the threshold crossing indices
     for i in range(len(threshold_idxs)):
         if threshold_idxs[i] < spike_end:
@@ -835,9 +845,11 @@ def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.lon
             spike_end = baseline_idxs_length - 2
 
         # This is the OTHER side of the baseline to the event, on both start/end
-        event_coordinates.append((spike_start, spike_end + 1))
+        event_coordinates[j][0] = spike_start
+        event_coordinates[j][1] = spike_end + 1
+        j += 1
 
-    return asarray(event_coordinates, dtype=int64)
+    return event_coordinates[:j]
 
 
 @cython.boundscheck(False)

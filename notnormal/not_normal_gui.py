@@ -54,10 +54,9 @@ class NotNormalGUI(tk.Tk):
         self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
         # Icon
         if hasattr(sys, '_MEIPASS'):
-            self.image = os.path.join(sys._MEIPASS, 'data', 'landing_page.png')
+            self.image = os.path.join(sys._MEIPASS, 'data', 'logo.png')
             self.icon = os.path.join(sys._MEIPASS, 'data', 'logo.ico')
         else:
-            self.image = os.path.join(__file__, '..', 'data', 'landing_page.png')
             self.image = os.path.join(__file__, '..', 'data', 'logo.png')
             self.icon = os.path.join(__file__, '..', 'data', 'logo.ico')
         self.iconbitmap(True, self.icon)
@@ -135,28 +134,76 @@ class NotNormalGUI(tk.Tk):
 
         # Landing page
         self.widgets['landing'] = dict()
-        self.widgets['landing']['frame'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
-        self.widgets['landing']['frame'].grid(row=0, column=0, columnspan=3, sticky="nsew")
-        self.widgets['landing']['inner'] = ttk.Frame(self.widgets['landing']['frame'], style='primary.TFrame')
-        self.widgets['landing']['frame'].columnconfigure(0, weight=1)
-        self.widgets['landing']['frame'].rowconfigure(0, weight=1)
-        self.widgets['landing']['inner'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING,
-                                              pady=WINDOW_PADDING)
-        photoimage = tk.PhotoImage(file=self.image)
-        photoimage = photoimage.subsample(2, 2)
-        self.widgets['landing']['image'] = tk.Label(self.widgets['landing']['inner'], image=photoimage)
-        self.widgets['landing']['image'].image = photoimage
+        self.widgets['landing']['main'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
+        self.widgets['landing']['main'].grid(row=0, column=0, columnspan=3, sticky="nsew")
+        self.widgets['landing']['inner'] = ttk.Frame(self.widgets['landing']['main'], style='primary.TFrame')
+        self.widgets['landing']['main'].columnconfigure(0, weight=1)
+        self.widgets['landing']['main'].rowconfigure(0, weight=1)
+        self.widgets['landing']['inner'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
+
+        # Information frame
+        self.widgets['landing']['information'] = ttk.Frame(self.widgets['landing']['inner'])
+        # Browse button
         self.widgets['landing']['button'] = ttk.Button(self.widgets['landing']['inner'], text="Browse", underline=0,
                                                        command=self.landing_load)
+
+        # Layout
         self.widgets['landing']['inner'].columnconfigure(0, weight=1)
         self.widgets['landing']['inner'].rowconfigure(0, weight=1)
-        self.widgets['landing']['image'].grid(row=0, column=0, sticky="nsew")
+        self.widgets['landing']['information'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING,
+                                                    pady=(WINDOW_PADDING, 0))
         self.widgets['landing']['button'].grid(row=1, column=0, sticky="ew")
         self.widgets['landing']['button'].focus_set()
 
+        # Left frame
+        self.widgets['landing']['left'] = ttk.Frame(self.widgets['landing']['information'])
+        # Logo
+        photoimage = tk.PhotoImage(file=self.image).subsample(2, 2)
+        self.widgets['landing']['image'] = tk.Label(self.widgets['landing']['information'], image=photoimage)
+        self.widgets['landing']['image'].image = photoimage
+        # Right frame
+        self.widgets['landing']['right'] = ttk.Frame(self.widgets['landing']['information'])
+
+        # Layout
+        self.widgets['landing']['information'].rowconfigure(0, weight=1)
+        self.widgets['landing']['information'].columnconfigure(0, minsize=185)
+        self.widgets['landing']['left'].grid(row=0, column=0, sticky="nsew")
+        self.widgets['landing']['information'].columnconfigure(1, weight=1)
+        self.widgets['landing']['image'].grid(row=0, column=1, sticky="nsew")
+        self.widgets['landing']['information'].columnconfigure(2, minsize=185)
+        self.widgets['landing']['right'].grid(row=0, column=2, sticky="nsew")
+
+        # Left information
+        leftgap = ttk.Label(self.widgets['landing']['left'], text="")
+        self.widgets['landing']['author'] = ttk.Label(self.widgets['landing']['left'], text="Author: el20dlgc")
+        self.widgets['landing']['email'] = ttk.Label(self.widgets['landing']['left'],
+                                                     text="Email: el20dlgc@leeds.ac.uk")
+        self.widgets['landing']['github'] = ttk.Label(self.widgets['landing']['left'],
+                                                      text="GitHub: EL20DLGC/notnormal")
+        # Layout
+        self.widgets['landing']['left'].rowconfigure(0, weight=1)
+        leftgap.grid(row=0, column=0, sticky="nsew")
+        self.widgets['landing']['author'].grid(row=1, column=0, sticky="nsew", padx=(PADDING, 0), pady=(0, PADDING))
+        self.widgets['landing']['email'].grid(row=2, column=0, sticky="nsew", padx=(PADDING, 0), pady=(0, PADDING))
+        self.widgets['landing']['github'].grid(row=3, column=0, sticky="nsew", padx=(PADDING, 0), pady=(0, PADDING))
+
+        # Right information
+        rightgap1 = ttk.Label(self.widgets['landing']['right'], text="")
+        rightgap2 = ttk.Label(self.widgets['landing']['right'], text="")
+        self.widgets['landing']['license'] = ttk.Label(self.widgets['landing']['right'], text="License: GPLv3")
+        self.widgets['landing']['version'] = ttk.Label(self.widgets['landing']['right'], text="Version: 0.1.0")
+
+        # Layout
+        self.widgets['landing']['right'].rowconfigure(0, weight=1)
+        rightgap1.grid(row=0, column=0, sticky="nsew")
+        self.widgets['landing']['right'].columnconfigure(0, weight=1)
+        rightgap2.grid(row=1, column=0, sticky="nsew")
+        self.widgets['landing']['license'].grid(row=1, column=1, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
+        self.widgets['landing']['version'].grid(row=2, column=1, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
+
         # Change the window size
         self.resizable(False, False)
-        self.geometry(f"640x390+{self.width // 2 - 320}+{self.height // 2 - 195}")
+        self.geometry(f"700x400+{self.width // 2 - 350}+{self.height // 2 - 200}")
         self.state('normal')
 
     def landing_load(self):
@@ -1903,6 +1950,8 @@ class NotNormalGUI(tk.Tk):
                 self.filtered_trace,
                 int(1 / self.time_step),
                 self.analysis_options['estimate_cutoff'].get(),
+                self.analysis_options['replace_factor'].get(),
+                self.analysis_options['replace_gap'].get(),
                 self.analysis_options['threshold_window'].get(),
                 self.analysis_options['z_score'].get(),
             )
