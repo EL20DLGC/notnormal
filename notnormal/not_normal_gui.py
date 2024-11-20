@@ -10,6 +10,7 @@ import time
 import sys
 import tkinter as tk
 from functools import partial
+from webbrowser import open_new
 from idlelib import tooltip
 from os.path import basename
 from threading import Thread
@@ -42,39 +43,442 @@ LARGE_FONT = 16
 MEDIUM_FONT = 14
 SMALL_FONT = 10
 
+class FeatureWindow(tk.Toplevel):
+    def __init__(self, master, events):
+        super().__init__(master)
+        self.master = master
+        self.events = events
+        # Loose focus pls
+        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
+        # Title
+        self.title("Feature Window")
+        # Background
+        self.configure(bg="black")
+        # Icon
+        self.iconbitmap(True, master.icon)
+        # Root window size and resizability
+        self.geometry(f'{master.width // 2}x{master.height // 2}+{master.width // 4}+{master.height // 4}')
+        self.state('normal')
+        self.resizable(True, True)
+
+        # Dictionary to store all widgets
+        self.widgets = dict()
+        # Dictionary to store all windows
+        self.windows = dict()
+        # Figure options
+        self.figure_options = dict()
+        self.default_figure_options = dict()
+        # Features
+        self.features = list(events[1].keys())
+        for feature in list(events[1].keys()):
+            if type(events[1][feature]) in [np.ndarray, list, tuple]:
+                self.features.remove(feature)
+        # Plot types
+        self.plot_arguments = [
+            {
+                'name': 'Histogram',
+                'function': 'hist',
+                'sub_plot': {'shape': 111, 'projection': None},
+                'plot_options': {
+                    'x': {'label': 'Feature', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[1]},
+                    'bins': {'label': 'Bins', 'relim': True, 'type': int, 'values': [1, 100, 1], 'default': 20},
+                    'density': {'label': 'Density', 'relim': True, 'type': bool, 'default': False},
+                    'cumulative': {'label': 'Cumulative', 'relim': True, 'type': bool, 'default': False},
+                    'rwidth': {'label': 'Relative Width', 'relim': False, 'type': float, 'values': [0, 1, 0.05], 'default': 0.8},
+                    'facecolor': {'label': 'Face Colour', 'relim': False, 'type': 'colour', 'default': master.colours['trace']},
+                    'edgecolor': {'label': 'Edge Colour', 'relim': False, 'type': 'colour', 'default': master.colours['baseline']}
+                }
+            },
+            {
+                'name': '2D Scatter',
+                'function': 'scatter',
+                'sub_plot': {'shape': 111, 'projection': None},
+                'plot_options': {
+                    'x': {'label': 'Feature 1', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[1]},
+                    'y': {'label': 'Feature 2', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[2]},
+                    's': {'label': 'Marker Size', 'relim': True, 'type': int, 'values': [1, 100, 1], 'default': 40},
+                    'linewidths': {'label': 'Marker Outline', 'relim': False, 'type': float, 'values': [0, 5, 0.5], 'default': 1},
+                    'marker': {'label': 'Marker Type', 'relim': False, 'type': str, 'values': ['o', '.', '*', 's', 'p'], 'default': 'o'},
+                    'alpha': {'label': 'Alpha', 'relim': False, 'type': float, 'values': [0, 1, 0.05], 'default': 1},
+                    'c': {'label': 'Face Colour', 'relim': False, 'type': 'colour', 'default': master.colours['trace']},
+                    'edgecolor': {'label': 'Edge Colour', 'relim': False, 'type': 'colour', 'default': master.colours['baseline']}
+                }
+            },
+            {
+                'name': '3D Scatter',
+                'function': 'scatter',
+                'sub_plot': {'shape': 111, 'projection': '3d'},
+                'plot_options': {
+                    'xs': {'label': 'Feature 1', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[1]},
+                    'ys': {'label': 'Feature 1', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[2]},
+                    'zs': {'label': 'Feature 3', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[3]},
+                    's': {'label': 'Marker Size', 'relim': False, 'type': int, 'values': [1, 100, 1], 'default': 40},
+                    'linewidths': {'label': 'Marker Outline', 'relim': False, 'type': float, 'values': [0, 5, 0.5], 'default': 1},
+                    'marker': {'label': 'Marker Type', 'relim': False, 'type': str, 'values': ['o', '.', '*', 's', 'p'], 'default': 'o'},
+                    'alpha': {'label': 'Alpha', 'relim': False, 'type': float, 'values': [0, 1, 0.05], 'default': 1},
+                    'c': {'label': 'Face Colour', 'relim': False, 'type': 'colour', 'default': master.colours['trace']},
+                    'edgecolor': {'label': 'Edge Colour', 'relim': False, 'type': 'colour', 'default': master.colours['baseline']}
+                }
+            },
+        ]
+        self.plots = [plot['name'] for plot in self.plot_arguments]
+        self.current_plot = self.plots[0]
+
+        # Create layout
+        self.init_layout()
+        # Create options
+        self.init_options()
+        # Create feature view
+        self.init_feature_view()
+        # Create plots
+        for plot in self.plot_arguments:
+            self.init_plot(plot)
+
+        # Select the first tab
+        self.set_current_tab(self.plots[0])
+
+    def init_layout(self):
+        # Main window
+        self.windows['main'] = ttk.Frame(self)
+        self.windows['main'].pack(fill=tk.BOTH, expand=True)
+        # Left window
+        self.windows['left'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
+        # Right window
+        self.windows['right'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
+
+        # Main layout
+        self.windows['main'].rowconfigure(0, weight=1)
+        self.windows['main'].columnconfigure(1, weight=1)
+        self.windows['left'].grid(row=0, column=0, sticky="nsew")
+        self.windows['right'].grid(row=0, column=1, sticky="nsew")
+
+        # Left (options window)
+        self.windows['options'] = ttk.Frame(self.windows['left'], style='primary.TFrame')
+        # Right (feature view window)
+        self.windows['feature_view'] = ttk.Frame(self.windows['right'], style='primary.TFrame')
+
+        # Left layout
+        self.windows['left'].columnconfigure(0, weight=1, minsize=self.master.width // 6)
+        self.windows['left'].rowconfigure(0, weight=1)
+        self.windows['options'].grid(row=0, column=0, sticky="nsew", padx=(WINDOW_PADDING, 0), pady=WINDOW_PADDING)
+        # Right layout
+        self.windows['right'].rowconfigure(0, weight=1)
+        self.windows['right'].columnconfigure(0, weight=1)
+        self.windows['feature_view'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
+
+    def init_options(self):
+        self.widgets['options'] = dict()
+        # Options title
+        self.widgets['options']['title'] = ttk.Label(self.windows['options'], text="Options",
+                                                     style='primary.Inverse.TLabel', anchor='center')
+        # Internal frame
+        self.windows['options_internal'] = ttk.Frame(self.windows['options'])
+        # Layout
+        self.windows['options'].columnconfigure(0, weight=1)
+        self.windows['options'].rowconfigure(1, weight=1)
+        self.widgets['options']['title'].grid(row=0, column=0, sticky="nsew", pady=(WINDOW_PADDING, 0))
+        self.windows['options_internal'].grid(row=1, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
+
+        # Options notebook
+        self.widgets['options']['notebook'] = ttk.Notebook(self.windows['options_internal'])
+        self.widgets['options']['notebook'].enable_traversal()
+        self.widgets['options']['notebook'].bind("<<NotebookTabChanged>>", self.set_current_figure)
+        # Layout
+        self.windows['options_internal'].columnconfigure(0, weight=1)
+        self.windows['options_internal'].rowconfigure(0, weight=1)
+        self.widgets['options']['notebook'].grid(row=0, column=0, sticky="nsew")
+
+        # For each tab
+        for name in self.plots:
+            # Tab widgets
+            self.widgets['options'][name] = dict()
+            self.widgets['options'][name]['frame'] = ttk.Frame(self.widgets['options']['notebook'])
+            self.widgets['options'][name]['header_separator'] = ttk.Separator(self.widgets['options'][name]['frame'],
+                                                                             style='primary.TSeparator')
+            # Tab layout (column 0 is for labels, column 1 is for inputs)
+            self.widgets['options'][name]['frame'].columnconfigure(0, weight=1, uniform=name)
+            self.widgets['options'][name]['frame'].columnconfigure(1, weight=2, uniform=name)
+            self.widgets['options'][name]['header_separator'].grid(row=0, column=0, columnspan=2, sticky="nsew")
+            self.widgets['options']['notebook'].add(self.widgets['options'][name]['frame'], text=name)
+
+    def init_feature_view(self):
+        self.widgets['feature_view'] = dict()
+        # Figure title
+        self.widgets['feature_view']['title'] = ttk.Label(self.windows['feature_view'], text="Feature View",
+                                                          style='primary.Inverse.TLabel', anchor='center')
+        # Internal frame
+        self.windows['feature_view_internal'] = ttk.Frame(self.windows['feature_view'])
+        # Layout
+        self.windows['feature_view'].columnconfigure(0, weight=1)
+        self.windows['feature_view'].rowconfigure(1, weight=1)
+        self.widgets['feature_view']['title'].grid(row=0, column=0, sticky="nsew", pady=(WINDOW_PADDING, 0))
+        self.windows['feature_view_internal'].grid(row=1, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
+
+        # For each name
+        for name in self.plots:
+            # name widgets
+            self.widgets['feature_view'][name] = dict()
+            self.widgets['feature_view'][name]['frame'] = ttk.Frame(self.windows['feature_view_internal'])
+            # name layout (do not place frame in grid as this is done dynamically)
+            self.windows['feature_view_internal'].columnconfigure(0, weight=1)
+            self.windows['feature_view_internal'].rowconfigure(0, weight=1)
+            # Figure and canvas
+            self.widgets['feature_view'][name]['fig'] = Figure(layout='constrained', figsize=(1, 1))
+            self.widgets['feature_view'][name]['canvas'] = FigureCanvasTkAgg(self.widgets['feature_view'][name]['fig'],
+                                                                            self.widgets['feature_view'][name]['frame'])
+            self.widgets['feature_view'][name]['canvas'].draw()
+            # Toolbar
+            self.widgets['feature_view'][name]['toolbar'] = NavigationToolbar2Tk(
+                self.widgets['feature_view'][name]['canvas'],  self.widgets['feature_view'][name]['frame'],
+                pack_toolbar=False)
+            self.widgets['feature_view'][name]['toolbar'].children['!button4'].pack_forget()
+            for children in self.widgets['feature_view'][name]['toolbar'].winfo_children():
+                children.configure(background='white')
+            self.widgets['feature_view'][name]['toolbar'].update()
+            # Toolbar separator
+            self.widgets['feature_view'][name]['toolbar_separator'] = ttk.Separator(
+                self.widgets['feature_view'][name]['frame'])
+            # Frame layout
+            self.widgets['feature_view'][name]['frame'].columnconfigure(0, weight=1)
+            self.widgets['feature_view'][name]['frame'].rowconfigure(2, weight=1)
+            self.widgets['feature_view'][name]['toolbar'].grid(row=0, column=0, sticky='nsew', padx=PADDING)
+            self.widgets['feature_view'][name]['toolbar_separator'].grid(row=1, column=0, sticky="nsew")
+            self.widgets['feature_view'][name]['canvas'].get_tk_widget().grid(row=2, column=0, sticky='nsew',
+                                                                             padx=2 * PADDING, pady=2 * PADDING)
+
+    def init_plot(self, plot_arguments: dict):
+        name = plot_arguments['name']
+        options = plot_arguments['plot_options']
+
+        # Options
+        self.figure_options[name] = dict()
+        figure_options = self.figure_options[name]
+        self.default_figure_options[name] = dict()
+        default_figure_options = self.default_figure_options[name]
+        widgets = self.widgets['options'][name]
+
+        i = 1
+        for option in options.keys():
+            # Label
+            widgets['frame'].rowconfigure(i, weight=1, uniform=name)
+            widgets[option + '_label'] = ttk.Label(widgets['frame'], text=options[option]['label'])
+            widgets[option + '_label'].grid(row=i, column=0, sticky="nsew", padx=PADDING)
+
+            # Variable
+            if options[option]['type'] == str or options[option]['type'] == 'colour':
+                figure_options[option] = tk.StringVar()
+            elif options[option]['type'] == int:
+                figure_options[option] = tk.IntVar()
+            elif options[option]['type'] == float:
+                figure_options[option] = tk.DoubleVar()
+            elif options[option]['type'] == bool:
+                figure_options[option] = tk.BooleanVar()
+
+            # Default
+            figure_options[option].set(options[option]['default'])
+            default_figure_options[option] = options[option]['default']
+
+            # Entry
+            if options[option]['type'] == str:
+                widgets[option] = ttk.Combobox(
+                    widgets['frame'],
+                    textvariable=figure_options[option],
+                    width=ENTRY_WIDTH + 1,
+                    justify='center',
+                    values=options[option]['values'],
+                    state='readonly'
+                )
+                widgets[option].bind("<<ComboboxSelected>>", lambda _ : self.update_plot(plot_arguments,
+                                                                                     relim=options[option]['relim']))
+                widgets[option].grid(row=i, column=1, sticky="e", padx=PADDING)
+            elif options[option]['type'] == int or options[option]['type'] == float:
+                widgets[option] = ttk.Spinbox(
+                    widgets['frame'],
+                    textvariable=figure_options[option],
+                    width=ENTRY_WIDTH + 1,
+                    justify='center',
+                    from_=options[option]['values'][0],
+                    to=options[option]['values'][1],
+                    increment=options[option]['values'][2],
+                    command=partial(self.update_plot, plot_arguments, relim=options[option]['relim'])
+                )
+                widgets[option].grid(row=i, column=1, sticky="e", padx=PADDING)
+            elif options[option]['type'] == bool:
+                widgets[option] = ttk.Checkbutton(
+                    widgets['frame'],
+                    variable=figure_options[option],
+                    width=ENTRY_WIDTH - 5,
+                    onvalue=True,
+                    offvalue=False,
+                    command=partial(self.update_plot, plot_arguments, relim=options[option]['relim']),
+                    style='Roundtoggle.Toolbutton'
+                )
+                widgets[option].grid(row=i, column=1, sticky="e", padx=PADDING)
+            elif options[option]['type'] == 'colour':
+                widgets[option] = ttk.Button(
+                    widgets['frame'],
+                    command=partial(self.update_colour, plot_arguments, option),
+                    width=ENTRY_WIDTH - 2
+                )
+                self.master.style.configure(
+                    f'{name.replace(" ", "")}_{option}_colour.TButton',
+                    background=figure_options[option].get(),
+                    bordercolor=figure_options[option].get(),
+                    lightcolor=figure_options[option].get(),
+                    darkcolor=figure_options[option].get(),
+                    padding=2,
+                )
+                self.master.style.map(
+                    f'{name.replace(" ", "")}_{option}_colour.TButton',
+                    background=[('active', figure_options[option].get())],
+                    bordercolor=[('active', figure_options[option].get())],
+                    lightcolor=[('active', figure_options[option].get())],
+                    darkcolor=[('active', figure_options[option].get())]
+                )
+                widgets[option].configure(style=f'{name.replace(" ", "")}_{option}_colour.TButton')
+                widgets[option].grid(row=i, column=1, sticky="e", padx=(PADDING, PADDING + 1))
+
+            # Separator
+            if i < (2 * len(options)) - 1:
+                widgets[option + '_separator'] = ttk.Separator(widgets['frame'], orient='horizontal')
+                widgets[option + '_separator'].grid(row=i + 1, column=0, columnspan=2, sticky="nsew")
+
+            i += 2
+
+        # Feature view
+        self.widgets['feature_view'][name]['fig'].add_subplot(
+            plot_arguments['sub_plot']['shape'],
+            projection=plot_arguments['sub_plot']['projection'],
+            label=name
+        )
+        self.update_plot(plot_arguments=plot_arguments, relim=True)
+
+    def update_colour(self, plot_arguments: dict, option: str):
+        name = plot_arguments['name']
+        figure_options = self.figure_options[name]
+        widgets = self.widgets['options'][name]
+
+        colour = colorchooser.askcolor(title="Choose color", initialcolor=figure_options[option].get())[1]
+        if colour is None:
+            return
+
+        figure_options[option].set(colour)
+        self.master.style.configure(
+            f'{name.replace(" ", "")}_{option}_colour.TButton',
+            background=figure_options[option].get(),
+            bordercolor=figure_options[option].get(),
+            lightcolor=figure_options[option].get(),
+            darkcolor=figure_options[option].get(),
+            padding=2,
+        )
+        self.master.style.map(
+            f'{name.replace(" ", "")}_{option}_colour.TButton',
+            background=[('active', figure_options[option].get())],
+            bordercolor=[('active', figure_options[option].get())],
+            lightcolor=[('active', figure_options[option].get())],
+            darkcolor=[('active', figure_options[option].get())]
+        )
+        widgets[option].configure(style=f'{name.replace(" ", "")}_{option}_colour.TButton')
+
+        self.update_plot(plot_arguments)
+
+    def update_plot(self, plot_arguments: dict, relim: bool = False):
+        name = plot_arguments['name']
+        function = plot_arguments['function']
+
+        # Get and clear axis
+        ax = self.widgets['feature_view'][name]['fig'].axes[0]
+        ax.clear()
+
+        # Title
+        ax.set_title(self.events.label, fontsize=LARGE_FONT)
+
+        # Get options and set labels
+        options = dict()
+        for option in self.figure_options[name].keys():
+            if option in ['x', 'y', 'z', 'xs', 'ys', 'zs']:
+                options[option] = self.events.get_feature(self.figure_options[name][option].get())
+            else:
+                options[option] = self.figure_options[name][option].get()
+
+            if option in ['x', 'xs']:
+                ax.set_xlabel(self.figure_options[name][option].get(), fontsize=MEDIUM_FONT)
+            if option in ['y', 'ys']:
+                ax.set_ylabel(self.figure_options[name][option].get(), fontsize=MEDIUM_FONT)
+            if option in ['z', 'zs']:
+                ax.set_zlabel(self.figure_options[name][option].get(), rotation=90, fontsize=MEDIUM_FONT)
+        # No Y label
+        if 'y' not in options.keys() and 'ys' not in options.keys():
+            ax.set_ylabel('Density', fontsize=MEDIUM_FONT)
+
+        # Plot
+        plot = getattr(ax, function)(**options)
+
+        # Update data limits
+        if relim:
+            try:
+                ax.ignore_existing_data_limits = True
+                ax.update_datalim(plot.get_datalim(ax.transData))
+            except AttributeError:
+                ax.relim()
+            ax.autoscale(True)
+            self.widgets['feature_view'][name]['toolbar'].update()
+            self.widgets['feature_view'][name]['toolbar'].push_current()
+
+        # Draw
+        self.widgets['feature_view'][name]['canvas'].draw_idle()
+        self.widgets['feature_view'][name]['canvas'].flush_events()
+
+    def get_current_tab(self):
+        tab_id = self.widgets['options']['notebook'].select()
+        return self.widgets['options']['notebook'].tab(tab_id, "text")
+
+    def set_current_tab(self, name):
+        for i in self.widgets['options']['notebook'].tabs():
+            if self.widgets['options']['notebook'].tab(i, "text") == name:
+                self.widgets['options']['notebook'].select(i)
+                break
+
+    def set_current_figure(self, event):
+        # Hide the previous plot
+        self.widgets['feature_view'][self.current_plot]['frame'].grid_forget()
+        # Currently selected tab
+        self.current_plot = self.get_current_tab()
+        # Show the new plot
+        self.widgets['feature_view'][self.current_plot]['frame'].grid(row=0, column=0, sticky="nsew")
+
 
 class NotNormalGUI(tk.Tk):
     def __init__(self):
         super().__init__()
 
+        # Loose focus pls
+        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
         # Title
         self.title("Not Normal")
         self.tk.call('tk', 'appname', 'NotNormal')
-        # Loose focus pls
-        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
-        # Icon
-        if hasattr(sys, '_MEIPASS'):
-            self.image = os.path.join(sys._MEIPASS, 'data', 'logo.png')
-            self.icon = os.path.join(sys._MEIPASS, 'data', 'logo.ico')
-        else:
-            self.image = os.path.join(__file__, '..', 'data', 'logo.png')
-            self.icon = os.path.join(__file__, '..', 'data', 'logo.ico')
-        self.iconbitmap(True, self.icon)
         # Background
         self.configure(bg="black")
+        # Icon
+        if hasattr(sys, '_MEIPASS'):
+            self.data_path = os.path.join(sys._MEIPASS, 'data')
+        else:
+            self.data_path = os.path.join(__file__, '..', 'data')
+        self.icon = os.path.join(self.data_path, 'logo.ico')
+        self.iconbitmap(True, self.icon)
         # Root window size and resizability
         self.height = self.winfo_screenheight()
         self.width = self.winfo_screenwidth()
         self.geometry(f'{self.width}x{self.height}')
+        self.state('zoomed')
+        self.resizable(True, True)
         # DPI scaling
         if sys.platform == 'win32':
             scaling = ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100
         else:
             scaling = 1
         self.tk.call('tk', 'scaling', self.winfo_fpixels('1i') / (72 * scaling))
-        # setting tkinter window size
-        self.state('zoomed')
-        self.resizable(True, True)
+
         # Dictionary to store all widgets
         self.widgets = dict()
         # Dictionary to store all windows
@@ -121,108 +525,8 @@ class NotNormalGUI(tk.Tk):
         self.init_results()
         # Create tooltips
         self.init_tooltips()
-        # Show the landing page
-        self.landing_page()
-
-    def landing_page(self):
-        # Hide all windows
-        self.toggle_load('hide')
-        self.toggle_analyse('hide')
-        self.toggle_analysis_view('hide')
-        self.toggle_analysis_view_options('hide')
-        self.toggle_results('hide')
-
-        # Landing page
-        self.widgets['landing'] = dict()
-        self.widgets['landing']['main'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
-        self.widgets['landing']['main'].grid(row=0, column=0, columnspan=3, sticky="nsew")
-        self.widgets['landing']['inner'] = ttk.Frame(self.widgets['landing']['main'], style='primary.TFrame')
-        self.widgets['landing']['main'].columnconfigure(0, weight=1)
-        self.widgets['landing']['main'].rowconfigure(0, weight=1)
-        self.widgets['landing']['inner'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
-
-        # Information frame
-        self.widgets['landing']['information'] = ttk.Frame(self.widgets['landing']['inner'])
-        # Browse button
-        self.widgets['landing']['button'] = ttk.Button(self.widgets['landing']['inner'], text="Browse", underline=0,
-                                                       command=self.landing_load)
-
-        # Layout
-        self.widgets['landing']['inner'].columnconfigure(0, weight=1)
-        self.widgets['landing']['inner'].rowconfigure(0, weight=1)
-        self.widgets['landing']['information'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING,
-                                                    pady=(WINDOW_PADDING, 0))
-        self.widgets['landing']['button'].grid(row=1, column=0, sticky="ew")
-        self.widgets['landing']['button'].focus_set()
-
-        # Left frame
-        self.widgets['landing']['left'] = ttk.Frame(self.widgets['landing']['information'])
-        # Logo
-        photoimage = tk.PhotoImage(file=self.image).subsample(2, 2)
-        self.widgets['landing']['image'] = tk.Label(self.widgets['landing']['information'], image=photoimage)
-        self.widgets['landing']['image'].image = photoimage
-        # Right frame
-        self.widgets['landing']['right'] = ttk.Frame(self.widgets['landing']['information'])
-
-        # Layout
-        self.widgets['landing']['information'].rowconfigure(0, weight=1)
-        self.widgets['landing']['information'].columnconfigure(0, minsize=185)
-        self.widgets['landing']['left'].grid(row=0, column=0, sticky="nsew")
-        self.widgets['landing']['information'].columnconfigure(1, weight=1)
-        self.widgets['landing']['image'].grid(row=0, column=1, sticky="nsew")
-        self.widgets['landing']['information'].columnconfigure(2, minsize=185)
-        self.widgets['landing']['right'].grid(row=0, column=2, sticky="nsew")
-
-        # Left information
-        leftgap = ttk.Label(self.widgets['landing']['left'], text="")
-        self.widgets['landing']['author'] = ttk.Label(self.widgets['landing']['left'], text="Author: el20dlgc")
-        self.widgets['landing']['email'] = ttk.Label(self.widgets['landing']['left'],
-                                                     text="Email: el20dlgc@leeds.ac.uk")
-        self.widgets['landing']['github'] = ttk.Label(self.widgets['landing']['left'],
-                                                      text="GitHub: EL20DLGC/notnormal")
-        # Layout
-        self.widgets['landing']['left'].rowconfigure(0, weight=1)
-        leftgap.grid(row=0, column=0, sticky="nsew")
-        self.widgets['landing']['author'].grid(row=1, column=0, sticky="nsew", padx=(PADDING, 0), pady=(0, PADDING))
-        self.widgets['landing']['email'].grid(row=2, column=0, sticky="nsew", padx=(PADDING, 0), pady=(0, PADDING))
-        self.widgets['landing']['github'].grid(row=3, column=0, sticky="nsew", padx=(PADDING, 0), pady=(0, PADDING))
-
-        # Right information
-        rightgap1 = ttk.Label(self.widgets['landing']['right'], text="")
-        rightgap2 = ttk.Label(self.widgets['landing']['right'], text="")
-        self.widgets['landing']['license'] = ttk.Label(self.widgets['landing']['right'], text="License: GPLv3")
-        self.widgets['landing']['version'] = ttk.Label(self.widgets['landing']['right'], text="Version: 0.1.0")
-
-        # Layout
-        self.widgets['landing']['right'].rowconfigure(0, weight=1)
-        rightgap1.grid(row=0, column=0, sticky="nsew")
-        self.widgets['landing']['right'].columnconfigure(0, weight=1)
-        rightgap2.grid(row=1, column=0, sticky="nsew")
-        self.widgets['landing']['license'].grid(row=1, column=1, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
-        self.widgets['landing']['version'].grid(row=2, column=1, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
-
-        # Change the window size
-        self.resizable(False, False)
-        self.geometry(f"700x400+{self.width // 2 - 350}+{self.height // 2 - 200}")
-        self.state('normal')
-
-    def landing_load(self):
-        self.load_trace()
-
-        if self.flags['loaded']:
-            # Destroy the landing page
-            for key in self.widgets['landing'].keys():
-                self.widgets['landing'][key].destroy()
-
-            # Show the main window
-            self.geometry(f'{self.width}x{self.height}')
-            self.state('zoomed')
-            self.resizable(True, True)
-            self.toggle_load('show')
-            self.toggle_analyse('show')
-            self.toggle_analysis_view('show')
-            # Focus on the estimate button
-            self.widgets['analyse']['estimate'].focus_set()
+        # Create and show the landing page
+        self.init_landing_page()
 
     def init_style(self):
         # Initialise the colours
@@ -290,7 +594,7 @@ class NotNormalGUI(tk.Tk):
         # Right window
         self.windows['right'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
 
-        # Main Layout
+        # Main layout
         self.windows['main'].rowconfigure(0, weight=1)
         self.windows['left'].grid(row=0, column=0, sticky="nsew")
         self.windows['main'].columnconfigure(1, weight=1)
@@ -344,6 +648,95 @@ class NotNormalGUI(tk.Tk):
         tooltip.Hovertip(self.widgets['analyse']['replace_factor_input'], 'Factor for replacing events')
         tooltip.Hovertip(self.widgets['analyse']['replace_gap_input'], 'Gap for replacing events')
 
+    def init_landing_page(self):
+        # Hide all windows
+        self.toggle_load('hide')
+        self.toggle_analyse('hide')
+        self.toggle_analysis_view('hide')
+        self.toggle_analysis_view_options('hide')
+        self.toggle_results('hide')
+
+        # Landing page
+        self.widgets['landing'] = dict()
+        self.widgets['landing']['main'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
+        self.widgets['landing']['main'].grid(row=0, column=0, columnspan=3, sticky="nsew")
+        self.widgets['landing']['inner'] = ttk.Frame(self.widgets['landing']['main'], style='primary.TFrame')
+        self.widgets['landing']['main'].columnconfigure(0, weight=1)
+        self.widgets['landing']['main'].rowconfigure(0, weight=1)
+        self.widgets['landing']['inner'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
+
+        # Information frame
+        self.widgets['landing']['information'] = ttk.Frame(self.widgets['landing']['inner'])
+        # Browse button
+        self.widgets['landing']['button'] = ttk.Button(self.widgets['landing']['inner'], text="Browse", underline=0,
+                                                       command=self.landing_load)
+
+        # Layout
+        self.widgets['landing']['inner'].columnconfigure(0, weight=1)
+        self.widgets['landing']['inner'].rowconfigure(0, weight=1)
+        self.widgets['landing']['information'].grid(row=0, column=0, sticky="nsew", padx=WINDOW_PADDING,
+                                                    pady=(WINDOW_PADDING, 0))
+        self.widgets['landing']['button'].grid(row=1, column=0, sticky="ew")
+        self.widgets['landing']['button'].focus_set()
+
+        # Left frame
+        self.widgets['landing']['left'] = ttk.Frame(self.widgets['landing']['information'])
+        # Logo
+        logo = tk.PhotoImage(file=os.path.join(self.data_path, 'logo.png')).subsample(2, 2)
+        self.widgets['landing']['image'] = tk.Label(self.widgets['landing']['information'], image=logo)
+        self.widgets['landing']['image'].image = logo
+        # Right frame
+        self.widgets['landing']['right'] = ttk.Frame(self.widgets['landing']['information'])
+
+        # Layout
+        self.widgets['landing']['information'].rowconfigure(0, weight=1)
+        self.widgets['landing']['information'].columnconfigure(0, minsize=185)
+        self.widgets['landing']['left'].grid(row=0, column=0, sticky="nsew")
+        self.widgets['landing']['information'].columnconfigure(1, weight=1)
+        self.widgets['landing']['image'].grid(row=0, column=1, sticky="nsew")
+        self.widgets['landing']['information'].columnconfigure(2, minsize=185)
+        self.widgets['landing']['right'].grid(row=0, column=2, sticky="nsew")
+
+        # Left information
+        self.widgets['landing']['left_gap'] = ttk.Label(self.widgets['landing']['left'], text="")
+        email_icon = tk.PhotoImage(file=os.path.join(self.data_path, 'email_icon.png'))
+        self.widgets['landing']['email_icon'] = ttk.Label(self.widgets['landing']['left'], text="", image=email_icon)
+        self.widgets['landing']['email_icon'].image = email_icon
+        self.widgets['landing']['email'] = ttk.Label(self.widgets['landing']['left'], text="el20dlgc@leeds.ac.uk",
+                                                     foreground='blue', cursor='hand2')
+        self.widgets['landing']['email'].bind("<Button-1>", lambda event: open_new("mailto:el20dlgc@leeds.ac.uk"))
+
+        # Layout
+        self.widgets['landing']['left'].rowconfigure(0, weight=1)
+        self.widgets['landing']['left'].columnconfigure(1, weight=1)
+        self.widgets['landing']['left_gap'].grid(row=0, column=0, columnspan=2, sticky="nsew")
+        self.widgets['landing']['email_icon'].grid(row=1, column=0, sticky="nsew", padx=PADDING, pady=(0, PADDING))
+        self.widgets['landing']['email'].grid(row=1, column=1, sticky="nsew", pady=(0, PADDING))
+
+        # Right information
+        self.widgets['landing']['right_gap_1'] = ttk.Label(self.widgets['landing']['right'], text="")
+        self.widgets['landing']['right_gap_2'] = ttk.Label(self.widgets['landing']['right'], text="")
+        github_icon = tk.PhotoImage(file=os.path.join(self.data_path, 'github_icon.png'))
+        self.widgets['landing']['github_icon'] = ttk.Label(self.widgets['landing']['right'], text="", image=github_icon)
+        self.widgets['landing']['github_icon'].image = github_icon
+        self.widgets['landing']['github'] = ttk.Label(self.widgets['landing']['right'], text="notnormal",
+                                                      foreground='blue', cursor='hand2')
+        self.widgets['landing']['github'].bind("<Button-1>", lambda event:
+        open_new("https://www.github.com/el20dlgc/notnormal"))
+
+        # Layout
+        self.widgets['landing']['right'].rowconfigure(0, weight=1)
+        self.widgets['landing']['right'].columnconfigure(0, weight=1)
+        self.widgets['landing']['right_gap_1'].grid(row=0, column=0, columnspan=3, sticky="nsew")
+        self.widgets['landing']['right_gap_2'].grid(row=1, column=0, sticky="nsew")
+        self.widgets['landing']['github_icon'].grid(row=1, column=1, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
+        self.widgets['landing']['github'].grid(row=1, column=2, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
+
+        # Change the window size
+        self.geometry(f"700x400+{self.width // 2 - 350}+{self.height // 2 - 200}")
+        self.state('normal')
+        self.resizable(False, False)
+
     def init_load(self):
         self.widgets['load'] = dict()
         # Load title
@@ -394,22 +787,22 @@ class NotNormalGUI(tk.Tk):
         self.windows['load_internal'].columnconfigure(1, weight=2)
         self.windows['load_internal'].rowconfigure(0, weight=1)
         self.widgets['load']['filename_label'].grid(row=0, column=0, sticky="nsew", padx=PADDING)
-        self.widgets['load']['filename'].grid(row=0, column=1, sticky="nsew", padx=PADDING)
+        self.widgets['load']['filename'].grid(row=0, column=1, sticky="e", padx=PADDING)
         self.widgets['load']['filename_separator'].grid(row=1, column=0, columnspan=2, sticky="nsew")
         # Sample rate layout
         self.windows['load_internal'].rowconfigure(2, weight=1)
         self.widgets['load']['sample_rate_label'].grid(row=2, column=0, sticky="nsew", padx=PADDING)
-        self.widgets['load']['sample_rate'].grid(row=2, column=1, sticky="nsew", padx=PADDING)
+        self.widgets['load']['sample_rate'].grid(row=2, column=1, sticky="e", padx=PADDING)
         self.widgets['load']['sample_rate_separator'].grid(row=3, column=0, columnspan=2, sticky="nsew")
         # Samples layout
         self.windows['load_internal'].rowconfigure(4, weight=1)
         self.widgets['load']['samples_label'].grid(row=4, column=0, sticky="nsew", padx=PADDING)
-        self.widgets['load']['samples'].grid(row=4, column=1, sticky="nsew", padx=PADDING)
+        self.widgets['load']['samples'].grid(row=4, column=1, sticky="e", padx=PADDING)
         self.widgets['load']['samples_separator'].grid(row=5, column=0, columnspan=2, sticky="nsew")
         # Duration layout
         self.windows['load_internal'].rowconfigure(6, weight=1)
         self.widgets['load']['duration_label'].grid(row=6, column=0, sticky="nsew", padx=PADDING)
-        self.widgets['load']['duration'].grid(row=6, column=1, sticky="nsew", padx=6)
+        self.widgets['load']['duration'].grid(row=6, column=1, sticky="e", padx=6)
         # Browse layout
         self.widgets['load']['browse'].grid(row=7, column=0, columnspan=2, sticky="nsew", padx=PADDING,
                                             pady=(0, PADDING))
@@ -776,7 +1169,8 @@ class NotNormalGUI(tk.Tk):
             onvalue=True,
             offvalue=False,
             command=lambda: (self.widgets['analysis_view']['fig'].axes[0].grid(self.figure_options['grid'].get()),
-                             self.widgets['analysis_view']['fig'].canvas.draw()),
+                             self.widgets['analysis_view']['fig'].canvas.draw_idle(),
+                             self.widgets['analysis_view']['fig'].canvas.flush_events()),
             style='Roundtoggle.Toolbutton',
         )
         self.default_figure_options['grid'] = self.figure_options['grid'].get()
@@ -961,7 +1355,6 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['general'].rowconfigure(4, weight=1, uniform='options')
         self.widgets['analysis_view']['x_limit_label'].grid(row=4, column=0, sticky="nsew", padx=PADDING)
         self.widgets['analysis_view']['x_limit_frame'].grid(row=4, column=1, padx=PADDING)
-        self.widgets['analysis_view']['x_limit_separator'].grid(row=5, column=0, columnspan=2, sticky="nsew")
 
         # Lines headings layout
         self.widgets['analysis_view']['lines'].columnconfigure(1, weight=1, uniform='options')
@@ -1028,6 +1421,8 @@ class NotNormalGUI(tk.Tk):
             command=self.save_results,
             style='secondary.Outline.TButton'
         )
+        # Feature window
+        self.widgets['results']['feature_window'] = None
 
         # Frame layout
         self.windows['results_internal'].columnconfigure(0, weight=1)
@@ -1220,7 +1615,8 @@ class NotNormalGUI(tk.Tk):
         ax.set_xlabel("Time (s)", fontsize=MEDIUM_FONT)
         ax.set_ylabel("Current", fontsize=MEDIUM_FONT)
         ax.grid(self.figure_options['grid'].get())
-        self.widgets['analysis_view']['canvas'].draw()
+        self.widgets['analysis_view']['canvas'].draw_idle()
+        self.widgets['analysis_view']['canvas'].flush_events()
 
     def update_figure_show(self, key):
         # Check if the figure is initialised
@@ -1276,7 +1672,8 @@ class NotNormalGUI(tk.Tk):
                     ylist.append(None)
                 ax.plot(xlist, ylist, label='events', color=colour, linewidth=linewidth, linestyle=style, zorder=6)
 
-        self.widgets['analysis_view']['fig'].canvas.draw()
+        self.widgets['analysis_view']['fig'].canvas.draw_idle()
+        self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     def update_figure_color(self, key):
         colour = colorchooser.askcolor(title="Choose color", initialcolor=self.figure_options['colour'][key].get())[1]
@@ -1309,7 +1706,8 @@ class NotNormalGUI(tk.Tk):
                 if colour == line.get_color():
                     continue
                 line.set_color(colour)
-        self.widgets['analysis_view']['fig'].canvas.draw()
+        self.widgets['analysis_view']['fig'].canvas.draw_idle()
+        self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     def update_figure_linewidth(self, key, event):
         if not self.widgets['analysis_view']['fig'].axes or not self.figure_options['show'][key].get():
@@ -1322,7 +1720,8 @@ class NotNormalGUI(tk.Tk):
                 if width == line.get_linewidth():
                     continue
                 line.set_linewidth(width)
-        self.widgets['analysis_view']['fig'].canvas.draw()
+        self.widgets['analysis_view']['fig'].canvas.draw_idle()
+        self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     def update_figure_style(self, key, event):
         if not self.widgets['analysis_view']['fig'].axes or not self.figure_options['show'][key].get():
@@ -1335,7 +1734,8 @@ class NotNormalGUI(tk.Tk):
                 if style == line.get_linestyle():
                     continue
                 line.set_linestyle(style)
-        self.widgets['analysis_view']['fig'].canvas.draw()
+        self.widgets['analysis_view']['fig'].canvas.draw_idle()
+        self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     def update_results(self):
         # Add the final tab
@@ -1356,7 +1756,6 @@ class NotNormalGUI(tk.Tk):
             if str(widget) in self.widgets['results']['notebook'].tabs():
                 self.widgets['results']['notebook'].forget(widget)
                 widget.destroy()
-
         for tab in tabs:
             self.widgets['results']['notebook'].add(tab[0], text=tab[1])
 
@@ -1365,6 +1764,14 @@ class NotNormalGUI(tk.Tk):
             self.toggle_results('show')
         else:
             self.toggle_results('hide')
+
+        # Feature window
+        if 'Final' in self.analysis_results.keys():
+            self.widgets['results']['feature_window'] = FeatureWindow(self, self.analysis_results['Final'].events)
+        elif 'Estimate' in self.analysis_results.keys():
+            self.widgets['results']['feature_window'] = FeatureWindow(self, self.analysis_results['Estimate'].events)
+        elif self.widgets['results']['feature_window']:
+            self.widgets['results']['feature_window'].destroy()
 
     def toggle_load(self, toggle=None):
         if toggle is None and self.windows['load'].winfo_manager():
@@ -1463,11 +1870,7 @@ class NotNormalGUI(tk.Tk):
             labels.append(ttk.Label(stats_frame, text=stat))
             labels[-1].grid(row=row, column=0, sticky="nsew", padx=PADDING)
             values.append(ttk.Label(stats_frame, text=f'{main_stats[stat]:.6g}'))
-            # stats = main_stats[stat]
-            # main_stats[stat] = tk.DoubleVar()
-            # main_stats[stat].set(stats)
-            # values.append(ttk.Label(stats_frame, textvariable=main_stats[stat]))
-            values[-1].grid(row=row, column=1, sticky="nsw", padx=PADDING)
+            values[-1].grid(row=row, column=1, sticky="e", padx=PADDING)
             if i != len(main_stats) - 1:
                 seperators.append(ttk.Separator(stats_frame))
                 seperators[-1].grid(row=row + 1, column=0, columnspan=2, sticky="nsew")
@@ -1578,9 +1981,9 @@ class NotNormalGUI(tk.Tk):
 
         # Graph frame
         if self.widgets['results']['notebook'].tabs():
-            notebook_width = (self.widgets['results']['notebook'].winfo_reqwidth() - 2 * PADDING) / 100
+            notebook_width = (self.widgets['results']['notebook'].winfo_reqwidth() - 4 * PADDING) / 100
         else:
-            notebook_width = (self.width // 6 - 2 * PADDING) / 100
+            notebook_width = (self.width // 6 - 4 * PADDING) / 100
         length = len(trace_stats[0].keys()) + len(event_stats[0].keys())
         fig = Figure(layout='constrained', dpi=100, figsize=(notebook_width, 1.5 * length))
         # Trace stats
@@ -1646,7 +2049,8 @@ class NotNormalGUI(tk.Tk):
         toolbar_separator = ttk.Separator(graph_frame)
         toolbar_separator.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, PADDING))
         canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
-        canvas.draw()
+        canvas.draw_idle()
+        canvas.flush_events()
 
         return tab, 'Iteration'
 
@@ -1734,7 +2138,8 @@ class NotNormalGUI(tk.Tk):
         def remove():
             if line[0] in ax.get_lines():
                 line[0].remove()
-                self.widgets['analysis_view']['fig'].canvas.draw()
+                self.widgets['analysis_view']['fig'].canvas.draw_idle()
+                self.widgets['analysis_view']['fig'].canvas.flush_events()
 
         ax = self.widgets['analysis_view']['fig'].axes[0]
         trace_min = np.min(self.trace[start:end])
@@ -1745,7 +2150,8 @@ class NotNormalGUI(tk.Tk):
         line = ax.plot(self.time_vector[event_coordinates[0]:event_coordinates[1] + 1],
                        self.trace[event_coordinates[0]:event_coordinates[1] + 1], 'r', linewidth=3)
         self.widgets['analysis_view']['toolbar'].push_current()
-        self.widgets['analysis_view']['fig'].canvas.draw()
+        self.widgets['analysis_view']['fig'].canvas.draw_idle()
+        self.widgets['analysis_view']['fig'].canvas.flush_events()
         try:
             self.after(500, remove)
         except:
@@ -1914,6 +2320,23 @@ class NotNormalGUI(tk.Tk):
 
         # Set the flag
         self.flags['loaded'] = True
+
+    def landing_load(self):
+        self.load_trace()
+
+        if self.flags['loaded']:
+            # Destroy the landing page
+            self.widgets['landing']['main'].destroy()
+
+            # Show the main window
+            self.geometry(f'{self.width}x{self.height}')
+            self.state('zoomed')
+            self.resizable(True, True)
+            self.toggle_load('show')
+            self.toggle_analyse('show')
+            self.toggle_analysis_view('show')
+            # Focus on the estimate button
+            self.widgets['analyse']['estimate'].focus_set()
 
     def initial_estimate(self):
         if not self.flags['loaded']:

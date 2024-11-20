@@ -48,6 +48,34 @@ class Events:
             return len(self.events)
         return 0
 
+    def __getitem__(self, event_id: int):
+        """
+        Get an event dictionary by its ID.
+
+        Args:
+            event_id (int): The ID of the event dictionary to retrieve.
+
+        Returns:
+            dict: The event dictionary with the specified ID.
+        """
+
+        return self.get(event_id)
+
+    def __setitem__(self, event_id: int, event: dict):
+        """
+        Set an event dictionary by its ID.
+
+        Args:
+            event_id (int): The ID of the event dictionary to set.
+            event (dict): The event dictionary to set.
+        """
+
+        for i, e in enumerate(self.events):
+            if e.get('ID') == event_id:
+                self.events[i] = event
+                return
+        self.add(event)
+
     def add(self, event: dict):
         """
         Add an event dictionary to the events list.
@@ -74,7 +102,10 @@ class Events:
 
         if not self.events:
             return
-        return [event for event in self if event['ID'] == event_id][0]
+
+        event = [event for event in self if event.get('ID') == event_id]
+        if event:
+            return event[0]
 
     def get_feature(self, key: str):
         """
@@ -89,7 +120,8 @@ class Events:
 
         if not self.events:
             return
-        return [i[key] for i in self]
+
+        return [i.get(key) for i in self]
 
     def add_feature(self, key: str, value: ndarray):
         """
@@ -102,6 +134,7 @@ class Events:
 
         if not self.events or len(self) != len(value):
             return
+
         for i, event in enumerate(self):
             event[key] = value[i]
 

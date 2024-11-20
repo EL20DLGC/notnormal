@@ -573,9 +573,9 @@ def trace_statistics(
     with catch_warnings():
         filterwarnings('ignore')
         simplefilter('ignore')
-        #results['Overall Statistic'] = shapiro(adjusted).statistic
-        results['Positive Statistic'] = shapiro(adjusted[where(adjusted > percentile(adjusted, 75))]).statistic
-        results['Negative Statistic'] = shapiro(adjusted[where(adjusted < percentile(adjusted, 25))]).statistic
+        q1, q3 = quantile(adjusted, [0.25, 0.75])
+        results['Positive Statistic'] = shapiro(adjusted[where(adjusted > q3)]).statistic
+        results['Negative Statistic'] = shapiro(adjusted[where(adjusted < q1)]).statistic
         results['Influence'] = results['Negative Statistic'] - results['Positive Statistic']
     results['Standard Deviation'] = std(adjusted)
     results['Mean'] = mean(adjusted)
@@ -791,6 +791,7 @@ def locate_events(
     """
 
     assert trace.shape == baseline.shape == threshold.shape == filtered_trace.shape
+    assert event_direction in ['up', 'down', 'biphasic']
 
     # Filtered trace for baseline crossing indices
     baseline_idxs: cython.longlong[::1] = baseline_crosses(filtered_trace, baseline)
@@ -801,13 +802,13 @@ def locate_events(
     # Iterate to find bounds
     event_coordinates = event_bounds(threshold_idxs, baseline_idxs)
 
-    return asarray(event_coordinates, dtype=int64)
+    return event_coordinates
 
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
-def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.longlong[::1]) -> cython.longlong[:, ::1]:
+def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.longlong[::1]) -> ndarray:
     """
     Determine the bounds of events based on threshold and baseline crossing indices.
 
@@ -819,14 +820,17 @@ def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.lon
         ndarray: The coordinates of detected events.
     """
 
-    spike_start: cython.size_t
-    spike_end: cython.size_t = 0
-    i: cython.size_t
+    assert len(threshold_idxs) % 2 == 0
+
+    threshold_idxs_length: cython.size_t = len(threshold_idxs)
     baseline_idxs_length: cython.size_t = len(baseline_idxs)
+    spike_start: cython.size_t = 0
+    spike_end: cython.size_t = 0
+    i: cython.size_t = 0
     j: cython.size_t = 0
-    event_coordinates: cython.longlong[:, ::1] = zeros((len(threshold_idxs), 2), dtype=int64)
+    event_coordinates: cython.longlong[:, ::1] = zeros((threshold_idxs_length // 2, 2), dtype=int64)
     # Iterate through the threshold crossing indices
-    for i in range(len(threshold_idxs)):
+    for i in range(0, threshold_idxs_length - 1, 2):
         if threshold_idxs[i] < spike_end:
             continue
 
@@ -836,7 +840,7 @@ def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.lon
             spike_start -= 1
 
         # Iterate forwards to find the end of the event
-        spike_end = threshold_idxs[i] + 1
+        spike_end = threshold_idxs[i + 1]
         while baseline_idxs[spike_end] == 0 and spike_end < baseline_idxs_length - 2:
             spike_end += 1
 
@@ -849,7 +853,7 @@ def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.lon
         event_coordinates[j][1] = spike_end + 1
         j += 1
 
-    return event_coordinates[:j]
+    return asarray(event_coordinates[:j], dtype=int64)
 
 
 @cython.boundscheck(False)
@@ -910,11 +914,11 @@ def baseline_crosses(trace: ndarray, baseline: ndarray) -> ndarray:
 
     # Baseline adjust the trace
     adjusted: cython.double[::1] = trace - baseline
-    # Sign the trace then difference to find zero crossings
-    # Zero crossing indices are marked by 1, 0 otherwise
-    zero_trace = zeros(trace.shape, dtype=int64)
-    baseline_cross = where(diff(sign(adjusted)))[0]
-    zero_trace[baseline_cross] = 1
+
+    # Sign the trace then difference to find zero crossings (marked by 1, 0 otherwise)
+    zero_trace = zeros(trace.shape, dtype=DTYPE)
+    zero_trace = where(diff(sign(adjusted, casting="unsafe", out=zero_trace, dtype=DTYPE)), 1, 0)
+    zero_trace = concatenate([zero_trace, [0]], dtype=int64)
 
     return zero_trace
 
@@ -947,6 +951,7 @@ def thresholder(
     """
 
     assert trace.shape == baseline.shape
+    assert method in ['iqr', 'std']
 
     # Baseline adjust the trace
     adjusted = trace - baseline
@@ -988,8 +993,7 @@ def thresholder(
 
         if method == 'iqr':
             # doi:10.1186/1471-2288-14-135
-            q1 = quantile(current_segment, 0.25)
-            q3 = quantile(current_segment, 0.75)
+            q1, q3 = quantile(current_segment, [0.25, 0.75])
             n = len(current_segment)
             standard_deviation_view[start:end] = (q3 - q1) / (2 * norm.ppf((0.75 * n - 0.125) / (n + 0.25)))
         else:
@@ -1022,17 +1026,31 @@ def threshold_crosses(
     """
 
     assert trace.shape == baseline.shape == threshold.shape
+    assert event_direction in ['up', 'down', 'biphasic']
 
     # Baseline adjust the trace
     adjusted = trace - baseline
 
+    # Sign the trace then difference to find zero crossings (wrt the threshold)
     crosses = zeros(trace.shape, dtype=int64)
     if event_direction == 'up':
-        crosses = where(diff(sign(adjusted - threshold)) > 0)[0]
+        crosses = where(diff(sign(adjusted - threshold)) != 0)[0]
     elif event_direction == 'down':
-        crosses = where(diff(sign(adjusted + threshold)) < 0)[0]
+        crosses = where(diff(sign(adjusted + threshold)) != 0)[0]
     else:
-        crosses = sort(concatenate((where(diff(sign(adjusted + threshold)) < 0)[0],
-                                    where(diff(sign(adjusted - threshold)) > 0)[0])))
+        crosses = sort(concatenate((where(diff(sign(adjusted + threshold)) != 0)[0],
+                                    where(diff(sign(adjusted - threshold)) != 0)[0])))
+
+    if not len(crosses):
+        return crosses
+
+    # Check the first and last to make sure they are a pair
+    trace_length: cython.size_t = len(trace)
+    if abs(adjusted[crosses[0] + 1]) < threshold[crosses[0] + 1]:
+        crosses = concatenate([[0], crosses])
+    if abs(adjusted[crosses[len(crosses) - 1] + 1]) > threshold[crosses[len(crosses) - 1] + 1]:
+        crosses = concatenate([crosses, [trace_length - 1]])
+
+    assert len(crosses) % 2 == 0
 
     return crosses
