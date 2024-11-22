@@ -107,12 +107,13 @@ class Events:
         if event:
             return event[0]
 
-    def get_feature(self, key: str):
+    def get_feature(self, key: str, event_id: list[int] = None):
         """
         Get a feature from all event dictionaries.
 
         Args:
             key (str): The key of the feature to retrieve.
+            event_id (list[int], optional): A list of event IDs to retrieve the feature from. Default is None (all events).
 
         Returns:
             list: A list of feature values.
@@ -121,7 +122,10 @@ class Events:
         if not self.events:
             return
 
-        return [i.get(key) for i in self]
+        if event_id is None:
+            return [i.get(key) for i in self]
+
+        return [i.get(key) for i in self if i.get('ID') in event_id]
 
     def add_feature(self, key: str, value: ndarray):
         """

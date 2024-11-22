@@ -18,6 +18,7 @@ from tkinter import ttk, colorchooser, messagebox
 from tkinter.font import Font
 import numpy as np
 import pyabf
+from matplotlib.axes import Axes
 from matplotlib import patheffects as pe, rc
 from matplotlib.backend_bases import key_press_handler
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -27,7 +28,6 @@ from scipy.stats import norm
 from ttkbootstrap import Style, Floodgauge
 from notnormal import not_normal as nn
 from notnormal.results import Events
-
 
 if cython.compiled:
     COMPILED = True
@@ -49,7 +49,7 @@ class FeatureWindow(tk.Toplevel):
         self.master = master
         self.events = events
         # Loose focus pls
-        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
+        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 1))
         # Title
         self.title("Feature Window")
         # Background
@@ -66,63 +66,104 @@ class FeatureWindow(tk.Toplevel):
         # Dictionary to store all windows
         self.windows = dict()
         # Figure options
-        self.figure_options = dict()
-        self.default_figure_options = dict()
+        self.plot_options = dict()
+        # Axis options
+        self.axis_options = dict()
+        # Axis functions
+        self.axis_func_options = dict()
+        # Feature filters
+        self.feature_filters = dict()
         # Features
         self.features = list(events[1].keys())
         for feature in list(events[1].keys()):
             if type(events[1][feature]) in [np.ndarray, list, tuple]:
                 self.features.remove(feature)
         # Plot types
-        self.plot_arguments = [
+        self.figure_configs = [
             {
-                'name': 'Histogram',
+                'label': 'Histogram',
                 'function': 'hist',
-                'sub_plot': {'shape': 111, 'projection': None},
+                'sub_plot_init': {'projection': None},
+                'axis_init': {},
+                'axis_func_init': {
+                    'grid': {'visible': False},
+                },
+                'plot_init': {'zorder': 2},
+                'axis_options': {},
+                'axis_func_options': {
+                    'grid': {'label': 'Grid', 'relim': False, 'type': bool, 'default': True, 'kwargs': {}},
+                },
                 'plot_options': {
-                    'x': {'label': 'Feature', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[1]},
+                    'x': {'label': 'Feature', 'relim': True, 'type': 'feature', 'values': self.features, 'default': self.features[1]},
                     'bins': {'label': 'Bins', 'relim': True, 'type': int, 'values': [1, 100, 1], 'default': 20},
                     'density': {'label': 'Density', 'relim': True, 'type': bool, 'default': False},
                     'cumulative': {'label': 'Cumulative', 'relim': True, 'type': bool, 'default': False},
                     'rwidth': {'label': 'Relative Width', 'relim': False, 'type': float, 'values': [0, 1, 0.05], 'default': 0.8},
                     'facecolor': {'label': 'Face Colour', 'relim': False, 'type': 'colour', 'default': master.colours['trace']},
                     'edgecolor': {'label': 'Edge Colour', 'relim': False, 'type': 'colour', 'default': master.colours['baseline']}
+                },
+                'feature_filters': {
+                    'Outlier': {'label': 'Show Outliers', 'relim': False, 'type': bool, 'onvalue': 'all', 'default': False},
+                    'Direction': {'label': 'Direction', 'relim': False, 'type': str, 'values': ['up', 'down', 'all'], 'default': 'all'},
                 }
             },
             {
-                'name': '2D Scatter',
+                'label': '2D Scatter',
                 'function': 'scatter',
-                'sub_plot': {'shape': 111, 'projection': None},
+                'sub_plot_init': {'projection': None},
+                'axis_init': {},
+                'axis_func_init': {
+                    'grid': {'visible': True},
+                },
+                'plot_init': {'zorder': 2},
+                'axis_options': {},
+                'axis_func_options': {
+                    'grid': {'label': 'Grid', 'relim': False, 'type': bool, 'default': True, 'kwargs': {}},
+                },
                 'plot_options': {
-                    'x': {'label': 'Feature 1', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[1]},
-                    'y': {'label': 'Feature 2', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[2]},
+                    'x': {'label': 'Feature 1', 'relim': True, 'type': 'feature', 'values': self.features, 'default': self.features[1]},
+                    'y': {'label': 'Feature 2', 'relim': True, 'type': 'feature', 'values': self.features, 'default': self.features[2]},
                     's': {'label': 'Marker Size', 'relim': True, 'type': int, 'values': [1, 100, 1], 'default': 40},
                     'linewidths': {'label': 'Marker Outline', 'relim': False, 'type': float, 'values': [0, 5, 0.5], 'default': 1},
                     'marker': {'label': 'Marker Type', 'relim': False, 'type': str, 'values': ['o', '.', '*', 's', 'p'], 'default': 'o'},
                     'alpha': {'label': 'Alpha', 'relim': False, 'type': float, 'values': [0, 1, 0.05], 'default': 1},
                     'c': {'label': 'Face Colour', 'relim': False, 'type': 'colour', 'default': master.colours['trace']},
                     'edgecolor': {'label': 'Edge Colour', 'relim': False, 'type': 'colour', 'default': master.colours['baseline']}
+                },
+                'feature_filters': {
+                    'Outlier': {'label': 'Show Outliers', 'relim': False, 'type': bool, 'onvalue': 'all', 'default': False},
+                    'Direction': {'label': 'Direction', 'relim': False, 'type': str, 'values': ['up', 'down', 'all'], 'default': 'all'},
                 }
             },
             {
-                'name': '3D Scatter',
+                'label': '3D Scatter',
                 'function': 'scatter',
-                'sub_plot': {'shape': 111, 'projection': '3d'},
+                'sub_plot_init': {'projection': '3d'},
+                'axis_init': {},
+                'axis_func_init': {
+                    'grid': {'visible': True},
+                },
+                'plot_init': {'zorder': 2},
+                'axis_options': {},
+                'axis_func_options': {},
                 'plot_options': {
-                    'xs': {'label': 'Feature 1', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[1]},
-                    'ys': {'label': 'Feature 1', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[2]},
-                    'zs': {'label': 'Feature 3', 'relim': True, 'type': str, 'values': self.features, 'default': self.features[3]},
+                    'xs': {'label': 'Feature 1', 'relim': True, 'type': 'feature', 'values': self.features, 'default': self.features[1]},
+                    'ys': {'label': 'Feature 1', 'relim': True, 'type': 'feature', 'values': self.features, 'default': self.features[2]},
+                    'zs': {'label': 'Feature 3', 'relim': True, 'type': 'feature', 'values': self.features, 'default': self.features[3]},
                     's': {'label': 'Marker Size', 'relim': False, 'type': int, 'values': [1, 100, 1], 'default': 40},
                     'linewidths': {'label': 'Marker Outline', 'relim': False, 'type': float, 'values': [0, 5, 0.5], 'default': 1},
                     'marker': {'label': 'Marker Type', 'relim': False, 'type': str, 'values': ['o', '.', '*', 's', 'p'], 'default': 'o'},
                     'alpha': {'label': 'Alpha', 'relim': False, 'type': float, 'values': [0, 1, 0.05], 'default': 1},
                     'c': {'label': 'Face Colour', 'relim': False, 'type': 'colour', 'default': master.colours['trace']},
                     'edgecolor': {'label': 'Edge Colour', 'relim': False, 'type': 'colour', 'default': master.colours['baseline']}
+                },
+                'feature_filters': {
+                    'Outlier': {'label': 'Show Outliers', 'relim': False, 'type': bool, 'onvalue': 'all', 'default': False},
+                    'Direction': {'label': 'Direction', 'relim': False, 'type': str, 'values': ['up', 'down', 'all'], 'default': 'all'},
                 }
-            },
+            }
         ]
-        self.plots = [plot['name'] for plot in self.plot_arguments]
-        self.current_plot = self.plots[0]
+        self.figures = []
 
         # Create layout
         self.init_layout()
@@ -131,11 +172,12 @@ class FeatureWindow(tk.Toplevel):
         # Create feature view
         self.init_feature_view()
         # Create plots
-        for plot in self.plot_arguments:
-            self.init_plot(plot)
+        for config in self.figure_configs:
+            self.add_figure_config(config)
 
         # Select the first tab
-        self.set_current_tab(self.plots[0])
+        self.current_figure = self.figures[0]
+        self.set_current_tab(self.figures[0])
 
     def init_layout(self):
         # Main window
@@ -182,24 +224,11 @@ class FeatureWindow(tk.Toplevel):
         # Options notebook
         self.widgets['options']['notebook'] = ttk.Notebook(self.windows['options_internal'])
         self.widgets['options']['notebook'].enable_traversal()
-        self.widgets['options']['notebook'].bind("<<NotebookTabChanged>>", self.set_current_figure)
+        self.widgets['options']['notebook'].bind("<<NotebookTabChanged>>", lambda _: self.set_current_figure())
         # Layout
         self.windows['options_internal'].columnconfigure(0, weight=1)
         self.windows['options_internal'].rowconfigure(0, weight=1)
         self.widgets['options']['notebook'].grid(row=0, column=0, sticky="nsew")
-
-        # For each tab
-        for name in self.plots:
-            # Tab widgets
-            self.widgets['options'][name] = dict()
-            self.widgets['options'][name]['frame'] = ttk.Frame(self.widgets['options']['notebook'])
-            self.widgets['options'][name]['header_separator'] = ttk.Separator(self.widgets['options'][name]['frame'],
-                                                                             style='primary.TSeparator')
-            # Tab layout (column 0 is for labels, column 1 is for inputs)
-            self.widgets['options'][name]['frame'].columnconfigure(0, weight=1, uniform=name)
-            self.widgets['options'][name]['frame'].columnconfigure(1, weight=2, uniform=name)
-            self.widgets['options'][name]['header_separator'].grid(row=0, column=0, columnspan=2, sticky="nsew")
-            self.widgets['options']['notebook'].add(self.widgets['options'][name]['frame'], text=name)
 
     def init_feature_view(self):
         self.widgets['feature_view'] = dict()
@@ -214,205 +243,264 @@ class FeatureWindow(tk.Toplevel):
         self.widgets['feature_view']['title'].grid(row=0, column=0, sticky="nsew", pady=(WINDOW_PADDING, 0))
         self.windows['feature_view_internal'].grid(row=1, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
 
-        # For each name
-        for name in self.plots:
-            # name widgets
-            self.widgets['feature_view'][name] = dict()
-            self.widgets['feature_view'][name]['frame'] = ttk.Frame(self.windows['feature_view_internal'])
-            # name layout (do not place frame in grid as this is done dynamically)
-            self.windows['feature_view_internal'].columnconfigure(0, weight=1)
-            self.windows['feature_view_internal'].rowconfigure(0, weight=1)
-            # Figure and canvas
-            self.widgets['feature_view'][name]['fig'] = Figure(layout='constrained', figsize=(1, 1))
-            self.widgets['feature_view'][name]['canvas'] = FigureCanvasTkAgg(self.widgets['feature_view'][name]['fig'],
-                                                                            self.widgets['feature_view'][name]['frame'])
-            self.widgets['feature_view'][name]['canvas'].draw()
-            # Toolbar
-            self.widgets['feature_view'][name]['toolbar'] = NavigationToolbar2Tk(
-                self.widgets['feature_view'][name]['canvas'],  self.widgets['feature_view'][name]['frame'],
-                pack_toolbar=False)
-            self.widgets['feature_view'][name]['toolbar'].children['!button4'].pack_forget()
-            for children in self.widgets['feature_view'][name]['toolbar'].winfo_children():
-                children.configure(background='white')
-            self.widgets['feature_view'][name]['toolbar'].update()
-            # Toolbar separator
-            self.widgets['feature_view'][name]['toolbar_separator'] = ttk.Separator(
-                self.widgets['feature_view'][name]['frame'])
-            # Frame layout
-            self.widgets['feature_view'][name]['frame'].columnconfigure(0, weight=1)
-            self.widgets['feature_view'][name]['frame'].rowconfigure(2, weight=1)
-            self.widgets['feature_view'][name]['toolbar'].grid(row=0, column=0, sticky='nsew', padx=PADDING)
-            self.widgets['feature_view'][name]['toolbar_separator'].grid(row=1, column=0, sticky="nsew")
-            self.widgets['feature_view'][name]['canvas'].get_tk_widget().grid(row=2, column=0, sticky='nsew',
-                                                                             padx=2 * PADDING, pady=2 * PADDING)
+    def add_options_tab(self, figure_config: dict):
+        label = figure_config['label']
 
-    def init_plot(self, plot_arguments: dict):
-        name = plot_arguments['name']
-        options = plot_arguments['plot_options']
+        # Tab widgets
+        self.widgets['options'][label] = dict()
+        widgets = self.widgets['options'][label]
 
-        # Options
-        self.figure_options[name] = dict()
-        figure_options = self.figure_options[name]
-        self.default_figure_options[name] = dict()
-        default_figure_options = self.default_figure_options[name]
-        widgets = self.widgets['options'][name]
+        # Tab frame and separator
+        widgets['frame'] = ttk.Frame(self.widgets['options']['notebook'])
+        widgets['header_separator'] = ttk.Separator(widgets['frame'], style='primary.TSeparator')
+        # Tab layout (column 0 is for labels, column 1 is for inputs)
+        widgets['frame'].columnconfigure(0, weight=1, uniform=label)
+        widgets['frame'].columnconfigure(1, weight=2, uniform=label)
+        widgets['header_separator'].grid(row=0, column=0, columnspan=2, sticky="nsew")
+        # Add tab
+        self.widgets['options']['notebook'].add(widgets['frame'], text=label)
+
+        # Plot and axis options
+        self.plot_options[label] = dict()
+        self.axis_options[label] = dict()
+        self.axis_func_options[label] = dict()
+        self.feature_filters[label] = dict()
+        opt_length = (len(figure_config['axis_options']) + len(figure_config['plot_options']) +
+                      len(figure_config['axis_func_options']) + len(figure_config['feature_filters']))
 
         i = 1
-        for option in options.keys():
-            # Label
-            widgets['frame'].rowconfigure(i, weight=1, uniform=name)
-            widgets[option + '_label'] = ttk.Label(widgets['frame'], text=options[option]['label'])
-            widgets[option + '_label'].grid(row=i, column=0, sticky="nsew", padx=PADDING)
+        for tk_var, options in [(self.plot_options[label], figure_config['plot_options']),
+                                (self.axis_options[label], figure_config['axis_options']),
+                                (self.axis_func_options[label], figure_config['axis_func_options']),
+                                (self.feature_filters[label], figure_config['feature_filters'])]:
+            for opt in options.keys():
+                # Tk variables
+                if options[opt]['type'] in [str, 'colour', 'feature']:
+                    tk_var[opt] = tk.StringVar()
+                elif options[opt]['type'] == int:
+                    tk_var[opt] = tk.IntVar()
+                elif options[opt]['type'] == float:
+                    tk_var[opt] = tk.DoubleVar()
+                elif options[opt]['type'] == bool:
+                    tk_var[opt] = tk.BooleanVar()
 
-            # Variable
-            if options[option]['type'] == str or options[option]['type'] == 'colour':
-                figure_options[option] = tk.StringVar()
-            elif options[option]['type'] == int:
-                figure_options[option] = tk.IntVar()
-            elif options[option]['type'] == float:
-                figure_options[option] = tk.DoubleVar()
-            elif options[option]['type'] == bool:
-                figure_options[option] = tk.BooleanVar()
+                # Default
+                tk_var[opt].set(options[opt]['default'])
 
-            # Default
-            figure_options[option].set(options[option]['default'])
-            default_figure_options[option] = options[option]['default']
+                # Label
+                widgets['frame'].rowconfigure(i, weight=1, uniform=label)
+                widgets[opt + '_label'] = ttk.Label(widgets['frame'], text=options[opt]['label'])
+                widgets[opt + '_label'].grid(row=i, column=0, sticky="nsew", padx=PADDING)
 
-            # Entry
-            if options[option]['type'] == str:
-                widgets[option] = ttk.Combobox(
-                    widgets['frame'],
-                    textvariable=figure_options[option],
-                    width=ENTRY_WIDTH + 1,
-                    justify='center',
-                    values=options[option]['values'],
-                    state='readonly'
-                )
-                widgets[option].bind("<<ComboboxSelected>>", lambda _ : self.update_plot(plot_arguments,
-                                                                                     relim=options[option]['relim']))
-                widgets[option].grid(row=i, column=1, sticky="e", padx=PADDING)
-            elif options[option]['type'] == int or options[option]['type'] == float:
-                widgets[option] = ttk.Spinbox(
-                    widgets['frame'],
-                    textvariable=figure_options[option],
-                    width=ENTRY_WIDTH + 1,
-                    justify='center',
-                    from_=options[option]['values'][0],
-                    to=options[option]['values'][1],
-                    increment=options[option]['values'][2],
-                    command=partial(self.update_plot, plot_arguments, relim=options[option]['relim'])
-                )
-                widgets[option].grid(row=i, column=1, sticky="e", padx=PADDING)
-            elif options[option]['type'] == bool:
-                widgets[option] = ttk.Checkbutton(
-                    widgets['frame'],
-                    variable=figure_options[option],
-                    width=ENTRY_WIDTH - 5,
-                    onvalue=True,
-                    offvalue=False,
-                    command=partial(self.update_plot, plot_arguments, relim=options[option]['relim']),
-                    style='Roundtoggle.Toolbutton'
-                )
-                widgets[option].grid(row=i, column=1, sticky="e", padx=PADDING)
-            elif options[option]['type'] == 'colour':
-                widgets[option] = ttk.Button(
-                    widgets['frame'],
-                    command=partial(self.update_colour, plot_arguments, option),
-                    width=ENTRY_WIDTH - 2
-                )
-                self.master.style.configure(
-                    f'{name.replace(" ", "")}_{option}_colour.TButton',
-                    background=figure_options[option].get(),
-                    bordercolor=figure_options[option].get(),
-                    lightcolor=figure_options[option].get(),
-                    darkcolor=figure_options[option].get(),
-                    padding=2,
-                )
-                self.master.style.map(
-                    f'{name.replace(" ", "")}_{option}_colour.TButton',
-                    background=[('active', figure_options[option].get())],
-                    bordercolor=[('active', figure_options[option].get())],
-                    lightcolor=[('active', figure_options[option].get())],
-                    darkcolor=[('active', figure_options[option].get())]
-                )
-                widgets[option].configure(style=f'{name.replace(" ", "")}_{option}_colour.TButton')
-                widgets[option].grid(row=i, column=1, sticky="e", padx=(PADDING, PADDING + 1))
+                # Entry
+                if options[opt]['type'] in [str, 'feature']:
+                    widgets[opt] = ttk.Combobox(
+                        widgets['frame'],
+                        textvariable=tk_var[opt],
+                        width=ENTRY_WIDTH + 1,
+                        justify='center',
+                        values=options[opt]['values'],
+                        state='readonly'
+                    )
+                    relim = options[opt]['relim']
+                    widgets[opt].bind("<<ComboboxSelected>>",
+                                         lambda _: self.update_figure(figure_config, relim=relim))
+                    widgets[opt].grid(row=i, column=1, sticky="e", padx=PADDING)
+                elif options[opt]['type'] in [int, float]:
+                    widgets[opt] = ttk.Spinbox(
+                        widgets['frame'],
+                        textvariable=tk_var[opt],
+                        width=ENTRY_WIDTH + 1,
+                        justify='center',
+                        from_=options[opt]['values'][0],
+                        to=options[opt]['values'][1],
+                        increment=options[opt]['values'][2],
+                        command=partial(self.update_figure, figure_config, relim=options[opt]['relim'])
+                    )
+                    widgets[opt].grid(row=i, column=1, sticky="e", padx=PADDING)
+                elif options[opt]['type'] == bool:
+                    widgets[opt] = ttk.Checkbutton(
+                        widgets['frame'],
+                        variable=tk_var[opt],
+                        width=ENTRY_WIDTH - 5,
+                        onvalue=True,
+                        offvalue=False,
+                        command=partial(self.update_figure, figure_config, relim=options[opt]['relim']),
+                        style='Roundtoggle.Toolbutton'
+                    )
+                    widgets[opt].grid(row=i, column=1, sticky="e", padx=PADDING)
+                elif options[opt]['type'] == 'colour':
+                    widgets[opt] = ttk.Button(
+                        widgets['frame'],
+                        command=partial(self.update_colour, figure_config, opt),
+                        width=ENTRY_WIDTH - 2
+                    )
+                    self.master.style.configure(
+                        f'{label.replace(" ", "")}_{opt}_colour.TButton',
+                        background=tk_var[opt].get(),
+                        bordercolor=tk_var[opt].get(),
+                        lightcolor=tk_var[opt].get(),
+                        darkcolor=tk_var[opt].get(),
+                        padding=2,
+                    )
+                    self.master.style.map(
+                        f'{label.replace(" ", "")}_{opt}_colour.TButton',
+                        background=[('active', tk_var[opt].get())],
+                        bordercolor=[('active', tk_var[opt].get())],
+                        lightcolor=[('active', tk_var[opt].get())],
+                        darkcolor=[('active', tk_var[opt].get())]
+                    )
+                    widgets[opt].configure(style=f'{label.replace(" ", "")}_{opt}_colour.TButton')
+                    widgets[opt].grid(row=i, column=1, sticky="e", padx=(PADDING, PADDING + 1))
 
-            # Separator
-            if i < (2 * len(options)) - 1:
-                widgets[option + '_separator'] = ttk.Separator(widgets['frame'], orient='horizontal')
-                widgets[option + '_separator'].grid(row=i + 1, column=0, columnspan=2, sticky="nsew")
+                # Separator
+                if i < (2 * opt_length) - 1:
+                    widgets[opt + '_separator'] = ttk.Separator(widgets['frame'], orient='horizontal')
+                    widgets[opt + '_separator'].grid(row=i + 1, column=0, columnspan=2, sticky="nsew")
 
-            i += 2
+                i += 2
+
+    def add_figure_frame(self, figure_config: dict):
+        label = figure_config['label']
+        sub_plot_init = figure_config['sub_plot_init']
+
+        # Figure frame widgets
+        self.widgets['feature_view'][label] = dict()
+        widgets = self.widgets['feature_view'][label]
+
+
+        widgets['frame'] = ttk.Frame(self.windows['feature_view_internal'])
+        # configure layout (do not place frame in grid as this is done dynamically)
+        self.windows['feature_view_internal'].columnconfigure(0, weight=1)
+        self.windows['feature_view_internal'].rowconfigure(0, weight=1)
+        # Figure and canvas
+        widgets['fig'] = Figure(layout='constrained', figsize=(1, 1))
+        widgets['canvas'] = FigureCanvasTkAgg(widgets['fig'], widgets['frame'])
+        widgets['canvas'].draw()
+        # Toolbar
+        widgets['toolbar'] = NavigationToolbar2Tk(widgets['canvas'], widgets['frame'], pack_toolbar=False)
+        widgets['toolbar'].children['!button4'].pack_forget()
+        for children in widgets['toolbar'].winfo_children():
+            children.configure(background='white')
+        widgets['toolbar'].update()
+        # Toolbar separator
+        widgets['toolbar_separator'] = ttk.Separator(widgets['frame'])
+        # Frame layout
+        widgets['frame'].columnconfigure(0, weight=1)
+        widgets['frame'].rowconfigure(2, weight=1)
+        widgets['toolbar'].grid(row=0, column=0, sticky='nsew', padx=PADDING)
+        widgets['toolbar_separator'].grid(row=1, column=0, sticky="nsew")
+        widgets['canvas'].get_tk_widget().grid(row=2, column=0, sticky='nsew', padx=2 * PADDING, pady=2 * PADDING)
 
         # Feature view
-        self.widgets['feature_view'][name]['fig'].add_subplot(
-            plot_arguments['sub_plot']['shape'],
-            projection=plot_arguments['sub_plot']['projection'],
-            label=name
-        )
-        self.update_plot(plot_arguments=plot_arguments, relim=True)
+        widgets['fig'].add_subplot(111, **sub_plot_init)
 
-    def update_colour(self, plot_arguments: dict, option: str):
-        name = plot_arguments['name']
-        figure_options = self.figure_options[name]
-        widgets = self.widgets['options'][name]
+    def add_figure_config(self, figure_config: dict):
+        # Parse the figure configuration
+        try:
+            figure_config = self.parse_figure_config(figure_config)
+        except ValueError as e:
+            messagebox.showerror("Error", e)
+            return
+        # Add to the list of figures
+        self.figures.append(figure_config['label'])
+        self.current_figure = figure_config['label']
 
-        colour = colorchooser.askcolor(title="Choose color", initialcolor=figure_options[option].get())[1]
+        # Add figure frame
+        self.add_figure_frame(figure_config)
+        # Add options tab
+        self.add_options_tab(figure_config)
+        # Update the figure
+        self.update_figure(figure_config, relim=True)
+
+    def update_colour(self, figure_config: dict, option: str):
+        label = figure_config['label']
+        plot_options = self.plot_options[label]
+        widgets = self.widgets['options'][label]
+
+        colour = colorchooser.askcolor(title="Choose color", initialcolor=plot_options[option].get())[1]
         if colour is None:
             return
 
-        figure_options[option].set(colour)
+        plot_options[option].set(colour)
         self.master.style.configure(
-            f'{name.replace(" ", "")}_{option}_colour.TButton',
-            background=figure_options[option].get(),
-            bordercolor=figure_options[option].get(),
-            lightcolor=figure_options[option].get(),
-            darkcolor=figure_options[option].get(),
+            f'{label.replace(" ", "")}_{option}_colour.TButton',
+            background=plot_options[option].get(),
+            bordercolor=plot_options[option].get(),
+            lightcolor=plot_options[option].get(),
+            darkcolor=plot_options[option].get(),
             padding=2,
         )
         self.master.style.map(
-            f'{name.replace(" ", "")}_{option}_colour.TButton',
-            background=[('active', figure_options[option].get())],
-            bordercolor=[('active', figure_options[option].get())],
-            lightcolor=[('active', figure_options[option].get())],
-            darkcolor=[('active', figure_options[option].get())]
+            f'{label.replace(" ", "")}_{option}_colour.TButton',
+            background=[('active', plot_options[option].get())],
+            bordercolor=[('active', plot_options[option].get())],
+            lightcolor=[('active', plot_options[option].get())],
+            darkcolor=[('active', plot_options[option].get())]
         )
-        widgets[option].configure(style=f'{name.replace(" ", "")}_{option}_colour.TButton')
+        widgets[option].configure(style=f'{label.replace(" ", "")}_{option}_colour.TButton')
 
-        self.update_plot(plot_arguments)
+        self.update_figure(figure_config)
 
-    def update_plot(self, plot_arguments: dict, relim: bool = False):
-        name = plot_arguments['name']
-        function = plot_arguments['function']
+    def update_figure(self, figure_config: dict, relim: bool = False):
+        label = figure_config['label']
+        function = figure_config['function']
+        plot_init = figure_config['plot_init']
+        plot_options = figure_config['plot_options']
+        axis_init = figure_config['axis_init']
+        axis_options = figure_config['axis_options']
+        axis_func_init = figure_config['axis_func_init']
+        axis_func_options = figure_config['axis_func_options']
 
         # Get and clear axis
-        ax = self.widgets['feature_view'][name]['fig'].axes[0]
+        ax = self.widgets['feature_view'][label]['fig'].axes[0]
+        view_limits = (ax.get_xlim(), ax.get_ylim())
         ax.clear()
 
-        # Title
-        ax.set_title(self.events.label, fontsize=LARGE_FONT)
+        # Get the filtered event IDs
+        event_ids = self.get_filtered_ids(figure_config)
 
-        # Get options and set labels
+        # Get figure options
         options = dict()
-        for option in self.figure_options[name].keys():
-            if option in ['x', 'y', 'z', 'xs', 'ys', 'zs']:
-                options[option] = self.events.get_feature(self.figure_options[name][option].get())
+        current_features = []
+        for option in plot_options.keys():
+            if plot_options[option]['type'] == 'feature':
+                options[option] = self.events.get_feature(self.plot_options[label][option].get(), event_ids)
+                current_features.append(self.plot_options[label][option].get())
             else:
-                options[option] = self.figure_options[name][option].get()
-
-            if option in ['x', 'xs']:
-                ax.set_xlabel(self.figure_options[name][option].get(), fontsize=MEDIUM_FONT)
-            if option in ['y', 'ys']:
-                ax.set_ylabel(self.figure_options[name][option].get(), fontsize=MEDIUM_FONT)
-            if option in ['z', 'zs']:
-                ax.set_zlabel(self.figure_options[name][option].get(), rotation=90, fontsize=MEDIUM_FONT)
-        # No Y label
-        if 'y' not in options.keys() and 'ys' not in options.keys():
-            ax.set_ylabel('Density', fontsize=MEDIUM_FONT)
+                options[option] = self.plot_options[label][option].get()
 
         # Plot
-        plot = getattr(ax, function)(**options)
+        plot = getattr(ax, function)(**options, **plot_init)
+
+        # Get axis options
+        options = dict()
+        for option in axis_options.keys():
+            options[option] = self.axis_options[label][option].get()
+
+        # Set axis options
+        ax.set(**options, **axis_init)
+
+        # Title
+        if 'title' not in axis_init.keys():
+            ax.set_title(self.events.label, fontsize=LARGE_FONT)
+        # Labels
+        if 'xlabel' not in axis_init.keys():
+            ax.set_xlabel(current_features[0], fontsize=MEDIUM_FONT)
+        if 'ylabel' not in axis_init.keys() and len(current_features) > 1:
+            ax.set_ylabel(current_features[1], fontsize=MEDIUM_FONT)
+        if 'zlabel' not in axis_init.keys() and len(current_features) > 2:
+            ax.set_zlabel(current_features[2], rotation=90, fontsize=MEDIUM_FONT)
+
+        # Set default axis func options
+        for option in axis_func_init.keys():
+            getattr(ax, option)(**axis_func_init[option])
+
+        # Set axis func options
+        for option in axis_func_options.keys():
+            getattr(ax, option)(self.axis_func_options[label][option].get(),
+                                **axis_func_options[option].get('kwargs', {}))
+
 
         # Update data limits
         if relim:
@@ -422,30 +510,119 @@ class FeatureWindow(tk.Toplevel):
             except AttributeError:
                 ax.relim()
             ax.autoscale(True)
-            self.widgets['feature_view'][name]['toolbar'].update()
-            self.widgets['feature_view'][name]['toolbar'].push_current()
+            self.widgets['feature_view'][label]['toolbar'].update()
+            self.widgets['feature_view'][label]['toolbar'].push_current()
+        else:
+            ax.set_xlim(view_limits[0])
+            ax.set_ylim(view_limits[1])
 
         # Draw
-        self.widgets['feature_view'][name]['canvas'].draw_idle()
-        self.widgets['feature_view'][name]['canvas'].flush_events()
+        self.widgets['feature_view'][label]['canvas'].draw_idle()
+        self.widgets['feature_view'][label]['canvas'].flush_events()
+
+    def update_current_figure(self, relim: bool = False):
+        config = self.figure_configs[self.current_figure]
+        self.update_figure(config, relim)
+
+    def update_all_figures(self, relim: bool = False):
+        for config in self.figure_configs:
+            self.update_figure(config, relim)
+
+    def parse_figure_config(self, figure_config: dict):
+        # Label
+        if not 'label' in figure_config.keys():
+            raise ValueError("label not found in figure configuration")
+        if figure_config['label'] in self.figures:
+            raise ValueError("label already exists in figure configurations")
+        if type(figure_config['label']) != str:
+            raise ValueError("label must be a string")
+
+        # Function
+        if not 'function' in figure_config.keys():
+            raise ValueError("function not found in figure configuration")
+        if type(figure_config['function']) != str:
+            raise ValueError("function must be a string")
+        if not hasattr(Axes, figure_config['function']):
+            raise ValueError("function not found in matplotlib Axes")
+
+        # Optional config keys
+        for key in ['sub_plot_init', 'axis_init', 'axis_func_init', 'plot_init' 'axis_options', 'axis_func_options',
+                    'plot_options', 'feature_filters']:
+            if not key in figure_config.keys():
+                figure_config[key] = {}
+            if type(figure_config[key]) != dict:
+                raise ValueError(f"{key} must be a dictionary")
+
+        # Options keys
+        for key in ['axis_options', 'axis_func_options', 'plot_options', 'feature_filters']:
+            for subkey in figure_config[key].keys():
+                if type(figure_config[key][subkey]) != dict:
+                    raise ValueError(f"{subkey} in {key} must be a dictionary")
+                if not 'label' in figure_config[key][subkey].keys():
+                    raise ValueError("{subkey} in {key} must have a label")
+                if not 'relim' in figure_config[key][subkey].keys():
+                    raise ValueError("{subkey} in {key} must have a relim option")
+                if not 'type' in figure_config[key][subkey].keys():
+                    raise ValueError("{subkey} in {key} must have a type option")
+                if not 'default' in figure_config[key][subkey].keys():
+                    raise ValueError("{subkey} in {key} must have a default option")
+
+        # Plot options
+        if not len(figure_config['plot_options']):
+            raise ValueError("plot_options cannot be empty")
+
+        # Axis functions
+        for key in ['axis_func_init', 'axis_func_options']:
+            for subkey in figure_config[key].keys():
+                if not hasattr(Axes, subkey):
+                    raise ValueError(f"{subkey} not found in matplotlib Axes")
+
+        return figure_config
+
+    def get_filtered_ids(self, figure_config: dict):
+        label = figure_config['label']
+        feature_filters = figure_config['feature_filters']
+
+        # Get feature filters
+        filters = [(key, self.feature_filters[label][key].get()) for key in feature_filters.keys()]
+        # Remove 'all' values
+        items = []
+        for key, value in filters:
+            if value == 'all':
+                continue
+            if value == True and feature_filters[key].get('onvalue') == 'all':
+                continue
+            if value == False and feature_filters[key].get('offvalue') == 'all':
+                continue
+            items.append((key, value))
+
+        event_ids = []
+        # Get event IDs that match the filters
+        for event in self.events:
+            if not all([event[key] == value for key, value in items]):
+                continue
+            else:
+                event_ids.append(event['ID'])
+
+        return event_ids
 
     def get_current_tab(self):
         tab_id = self.widgets['options']['notebook'].select()
         return self.widgets['options']['notebook'].tab(tab_id, "text")
 
-    def set_current_tab(self, name):
+    def set_current_tab(self, label):
         for i in self.widgets['options']['notebook'].tabs():
-            if self.widgets['options']['notebook'].tab(i, "text") == name:
+            if self.widgets['options']['notebook'].tab(i, "text") == label:
                 self.widgets['options']['notebook'].select(i)
                 break
 
-    def set_current_figure(self, event):
+    def set_current_figure(self):
         # Hide the previous plot
-        self.widgets['feature_view'][self.current_plot]['frame'].grid_forget()
+        self.widgets['feature_view'][self.current_figure]['frame'].grid_forget()
         # Currently selected tab
-        self.current_plot = self.get_current_tab()
+        self.current_figure = self.get_current_tab()
         # Show the new plot
-        self.widgets['feature_view'][self.current_plot]['frame'].grid(row=0, column=0, sticky="nsew")
+        self.widgets['feature_view'][self.current_figure]['frame'].grid(row=0, column=0, sticky="nsew")
 
 
 class NotNormalGUI(tk.Tk):
@@ -473,12 +650,7 @@ class NotNormalGUI(tk.Tk):
         self.state('zoomed')
         self.resizable(True, True)
         # DPI scaling
-        if sys.platform == 'win32':
-            scaling = ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100
-        else:
-            scaling = 1
-        self.tk.call('tk', 'scaling', self.winfo_fpixels('1i') / (72 * scaling))
-
+        self.tk.call('tk', 'scaling', self.winfo_fpixels('1i') / 72)
         # Dictionary to store all widgets
         self.widgets = dict()
         # Dictionary to store all windows
@@ -526,7 +698,10 @@ class NotNormalGUI(tk.Tk):
         # Create tooltips
         self.init_tooltips()
         # Create and show the landing page
+        #self.load_trace()
         self.init_landing_page()
+        # Show the landing page window
+        self.toggle_landing_page('show')
 
     def init_style(self):
         # Initialise the colours
@@ -649,13 +824,6 @@ class NotNormalGUI(tk.Tk):
         tooltip.Hovertip(self.widgets['analyse']['replace_gap_input'], 'Gap for replacing events')
 
     def init_landing_page(self):
-        # Hide all windows
-        self.toggle_load('hide')
-        self.toggle_analyse('hide')
-        self.toggle_analysis_view('hide')
-        self.toggle_analysis_view_options('hide')
-        self.toggle_results('hide')
-
         # Landing page
         self.widgets['landing'] = dict()
         self.widgets['landing']['main'] = ttk.Frame(self.windows['main'], style='secondary.TFrame')
@@ -731,11 +899,6 @@ class NotNormalGUI(tk.Tk):
         self.widgets['landing']['right_gap_2'].grid(row=1, column=0, sticky="nsew")
         self.widgets['landing']['github_icon'].grid(row=1, column=1, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
         self.widgets['landing']['github'].grid(row=1, column=2, sticky="nsew", padx=(0, PADDING), pady=(0, PADDING))
-
-        # Change the window size
-        self.geometry(f"700x400+{self.width // 2 - 350}+{self.height // 2 - 200}")
-        self.state('normal')
-        self.resizable(False, False)
 
     def init_load(self):
         self.widgets['load'] = dict()
@@ -1533,6 +1696,10 @@ class NotNormalGUI(tk.Tk):
             ax = self.widgets['analysis_view']['fig'].axes[0]
         else:
             return
+        # if figure_config['sub_plot_init']['projection'] != '3d':
+        #     from matplotlib.widgets import Slider
+        #     self.widgets['options'][label]['slider'] = Slider(ax, 'Time', 0, 100, valinit=0, valstep=1)
+        #     self.widgets['options'][label]['slider'].on_changed(lambda val: print(val))
 
         if type(self.time_vector) is np.ndarray and self.time_step:
             # Limits
@@ -1758,6 +1925,9 @@ class NotNormalGUI(tk.Tk):
                 widget.destroy()
         for tab in tabs:
             self.widgets['results']['notebook'].add(tab[0], text=tab[1])
+        # Feature window
+        if self.widgets['results']['feature_window']:
+            self.widgets['results']['feature_window'].destroy()
 
         if self.widgets['results']['notebook'].tabs():
             self.widgets['results']['notebook'].select(0)
@@ -1765,13 +1935,32 @@ class NotNormalGUI(tk.Tk):
         else:
             self.toggle_results('hide')
 
-        # Feature window
-        if 'Final' in self.analysis_results.keys():
-            self.widgets['results']['feature_window'] = FeatureWindow(self, self.analysis_results['Final'].events)
-        elif 'Estimate' in self.analysis_results.keys():
-            self.widgets['results']['feature_window'] = FeatureWindow(self, self.analysis_results['Estimate'].events)
-        elif self.widgets['results']['feature_window']:
-            self.widgets['results']['feature_window'].destroy()
+    def toggle_landing_page(self, toggle=None):
+        if toggle is None and self.widgets['landing']['main'].winfo_manager():
+            toggle = 'hide'
+        elif toggle is None:
+            toggle = 'show'
+
+        if self.widgets['landing']['main'].winfo_manager() and toggle == 'hide':
+            self.widgets['landing']['main'].grid_forget()
+            self.geometry(f'{self.width}x{self.height}')
+            self.state('zoomed')
+            self.resizable(True, True)
+            self.toggle_load('show')
+            self.toggle_analyse('show')
+            self.toggle_analysis_view('show')
+            self.widgets['analyse']['estimate'].focus_set()
+        elif toggle == 'show':
+            # Hide all windows
+            self.toggle_load('hide')
+            self.toggle_analyse('hide')
+            self.toggle_analysis_view('hide')
+            self.toggle_analysis_view_options('hide')
+            self.toggle_results('hide')
+            self.widgets['landing']['main'].grid(row=0, column=0, sticky="nsew")
+            self.geometry(f"700x400+{self.width // 2 - 350}+{self.height // 2 - 200}")
+            self.state('normal')
+            self.resizable(False, False)
 
     def toggle_load(self, toggle=None):
         if toggle is None and self.windows['load'].winfo_manager():
@@ -1840,6 +2029,9 @@ class NotNormalGUI(tk.Tk):
             self.windows['results'].grid(row=0, column=0, sticky="nsew", pady=WINDOW_PADDING, padx=(0, WINDOW_PADDING))
             self.windows['right'].grid(row=0, column=2, sticky="nsew")
 
+    def create_feature_window(self, events):
+        self.widgets['results']['feature_window'] = FeatureWindow(self, events)
+
     def create_tab(self, results, title):
         # Create tab and frames
         tab = ttk.Frame(self.widgets['results']['notebook'])
@@ -1847,6 +2039,14 @@ class NotNormalGUI(tk.Tk):
         stats_frame = ttk.Frame(tab)
         event_frame = ttk.Frame(tab)
         footer_separator = ttk.Separator(tab, style='primary.TSeparator')
+        feature_window_button = ttk.Button(
+            tab,
+            text="Feature Window",
+            underline=0,
+            command=partial(self.create_feature_window, results.events),
+            style='secondary.Outline.TButton'
+        )
+        self.bind('<Control-f>', lambda _: self.create_feature_window(results.events))
 
         # Tab layout
         tab.columnconfigure(0, weight=1)
@@ -1855,7 +2055,8 @@ class NotNormalGUI(tk.Tk):
         stats_frame.grid(row=1, column=0, sticky="nsew", pady=(0, PADDING))
         tab.rowconfigure(2, weight=5)
         event_frame.grid(row=2, column=0, sticky="nsew")
-        footer_separator.grid(row=3, column=0, columnspan=2, sticky="nsew")
+        feature_window_button.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=PADDING, pady=PADDING)
+        footer_separator.grid(row=4, column=0, columnspan=2, sticky="nsew")
 
         # Populate the main statistics
         main_stats = {**results.trace_stats, **results.event_stats}
@@ -2074,44 +2275,49 @@ class NotNormalGUI(tk.Tk):
         tree = event.widget
         if not tree.selection():
             return
-        item = tree.selection()[0]
-        event_id = int(tree.item(item, 'text'))
 
         events = self.analysis_results[title].events
-        # Toggle the outlier flag
-        if events.get(event_id)['Outlier']:
-            events.get(event_id)['Outlier'] = False
-            tree.item(item, tags='not_outlier')
-        else:
-            events.get(event_id)['Outlier'] = True
-            tree.item(item, tags='outlier')
+        for item in tree.selection():
+            event_id = int(tree.item(item, 'text'))
 
-        if title == 'Final':
-            return
+            # Toggle the outlier flag
+            if events.get(event_id)['Outlier']:
+                events.get(event_id)['Outlier'] = False
+                tree.item(item, tags='not_outlier')
+            else:
+                events.get(event_id)['Outlier'] = True
+                tree.item(item, tags='outlier')
 
         event_coordinates = []
         for event in events.events:
-            if not event['Outlier'] and event['Direction'] == self.analysis_options['event_direction'].get():
+            if not event['Outlier']:
                 event_coordinates.append(event['Coordinates'])
 
         # Recalculate cutoff
-        self.analysis_results[title].event_stats['Max Cutoff'] = np.round(
-            np.percentile(
-                nn.calculate_cutoffs(
-                    self.trace,
-                    self.baseline,
-                    self.threshold,
-                    np.asarray(event_coordinates),
-                    self.analysis_options['estimate_cutoff'].get(),
-                    int(1 / self.time_step)
+        try:
+            self.analysis_results[title].event_stats['Max Cutoff'] = np.round(
+                np.percentile(
+                    nn.calculate_cutoffs(
+                        self.trace,
+                        self.baseline,
+                        self.threshold,
+                        np.asarray(event_coordinates),
+                        self.analysis_options['estimate_cutoff'].get(),
+                        int(1 / self.time_step)
+                    ),
+                    25
                 ),
-                25
-            ),
-            2
-        )
+                2
+            )
+        except IndexError:
+            self.analysis_results[title].event_stats['Max Cutoff'] = self.analysis_options['estimate_cutoff'].get()
 
         self.analysis_options['cutoff'].set(self.analysis_results[title].event_stats['Max Cutoff'])
         self.flash_entry(self.widgets['analyse']['cutoff_input'])
+
+        # Update the feature window figure
+        if self.widgets['results']['feature_window']:
+            self.widgets['results']['feature_window'].update_all_figures()
 
     def jump_to_event(self, title, event):
         # Get the event ID
@@ -2243,14 +2449,18 @@ class NotNormalGUI(tk.Tk):
                                            self.analysis_options['estimate_cutoff'].get(), int(1 / self.time_step))
         events.add_feature('Max Cutoff', max_cutoffs)
         self.analysis_results[label].events = events
-        # Update the cutoff estimate window
+        # Update the direction for estimate only
         if label == 'Estimate':
             self.analysis_options['event_direction'].set(self.analysis_results[label].event_direction)
             self.flash_entry(self.widgets['analyse']['event_direction_input'])
-            self.analysis_options['cutoff'].set(np.round(self.analysis_results[label].event_stats['Max Cutoff'], 2))
-            self.flash_entry(self.widgets['analyse']['cutoff_input'])
-        else:
+
+        # Update the cutoff
+        try:
             self.analysis_results[label].event_stats['Max Cutoff'] = np.percentile(max_cutoffs, 25)
+        except IndexError:
+            self.analysis_results[label].event_stats['Max Cutoff'] = self.analysis_options['estimate_cutoff'].get()
+        self.analysis_options['cutoff'].set(np.round(self.analysis_results[label].event_stats['Max Cutoff'], 2))
+        self.flash_entry(self.widgets['analyse']['cutoff_input'])
 
         # Update the results window
         self.update_results()
@@ -2325,18 +2535,7 @@ class NotNormalGUI(tk.Tk):
         self.load_trace()
 
         if self.flags['loaded']:
-            # Destroy the landing page
-            self.widgets['landing']['main'].destroy()
-
-            # Show the main window
-            self.geometry(f'{self.width}x{self.height}')
-            self.state('zoomed')
-            self.resizable(True, True)
-            self.toggle_load('show')
-            self.toggle_analyse('show')
-            self.toggle_analysis_view('show')
-            # Focus on the estimate button
-            self.widgets['analyse']['estimate'].focus_set()
+            self.toggle_landing_page('hide')
 
     def initial_estimate(self):
         if not self.flags['loaded']:
