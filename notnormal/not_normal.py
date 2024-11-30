@@ -7,7 +7,7 @@ thresholding method and a simple extraction method.
 """
 
 from typing import Optional
-from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil
+from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil, empty
 from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, double, int32, int64
 from scipy.signal import oaconvolve
 from scipy.ndimage import median_filter
@@ -252,76 +252,77 @@ def iterate(
 
     # Iterate until the stopping criterion is met
     calculation_trace = trace.copy()
+    previous = (zeros(trace.shape[0], dtype=DTYPE), zeros(trace.shape[0], dtype=DTYPE))
     i: cython.int = 1
     while True:
-        results.append(Iteration(label=f'Iteration {i}', args=args, trace=trace, filtered_trace=filtered_trace))
+        current = Iteration(label=f'Iteration {i}', args=args, trace=trace, filtered_trace=filtered_trace)
         # Baseline and threshold on the calculation trace
         baseline = baseline_filter(calculation_trace, cutoff, sample_rate)
         threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate),
-                                results[-2].event_coordinates if i > 1 else None)
-
-        # Calculate trace statistics
-        results[-1].trace_stats = trace_statistics(calculation_trace, baseline,
-                                                   results[-2].event_coordinates if i > 1 else None)
+                                results[-1].event_coordinates if i > 1 else None)
 
         if vector_results:
-            results[-1].baseline = baseline
-            results[-1].threshold = threshold
-            results[-1].calculation_trace = calculation_trace
+            current.baseline = baseline
+            current.threshold = threshold
+            current.calculation_trace = calculation_trace
 
-        # Direction criterion
-        if i > 1 and (event_direction == 'down' and results[-1].trace_stats['Influence'] > 0 or
-                      event_direction == 'up' and results[-1].trace_stats['Influence'] < 0):
-            event_direction = 'biphasic'
-
-        # Locate events from the raw trace
-        results[-1].event_coordinates = locate_events(trace, filtered_trace, baseline, threshold, event_direction)
-        results[-1].event_coordinates = sort_coordinates(trace, baseline, results[-1].event_coordinates)
-        # Calculate event statistics
-        results[-1].event_stats = event_statistics(results[-1].event_coordinates)
+        # Calculate trace statistics
+        current.trace_stats = trace_statistics(calculation_trace, baseline,
+                                               results[-1].event_coordinates if i > 1 else None)
 
         # Stopping criterion
-        if i > 1 and (results[-1].event_stats['Total Event Samples'] in
-                      [r.event_stats['Total Event Samples'] for r in results[:-1]]):
+        if i > 2 and current.trace_stats['Overall'] <= results[-1].trace_stats['Overall']:
             break
 
+        # Direction criterion
+        if i > 1 and (event_direction == 'down' and current.trace_stats['Influence'] > 0 or
+                      event_direction == 'up' and current.trace_stats['Influence'] < 0):
+            event_direction = 'biphasic'
+
+        # Locate events from the raw trace and calculate event statistics
+        previous = (baseline, calculation_trace)
+        current.event_coordinates = locate_events(trace, filtered_trace, baseline, threshold, event_direction)
+        current.event_coordinates = sort_coordinates(trace, baseline, current.event_coordinates)
+        current.event_stats = event_statistics(current.event_coordinates)
+
         # Replace events in the calculation trace
-        calculation_trace = event_replacer(calculation_trace, baseline, results[-1].event_coordinates,
+        calculation_trace = event_replacer(calculation_trace, baseline, current.event_coordinates,
                                            replace_factor, replace_gap)
 
+        results.append(current)
         i += 1
 
+    baseline, calculation_trace = previous
     # Now that all events are surely removed, the calculation trace IS the baseline at event locations
-    coordinate_view: cython.longlong[:, ::1] = results[-1].event_coordinates
+    coordinate_view: cython.longlong[:, ::1] = results[-2].event_coordinates
     baseline_view: cython.double[::1] = baseline
     calculation_trace_view: cython.double[::1] = calculation_trace
     event_id: cython.size_t
     event_number: cython.size_t = len(coordinate_view)
     for event_id in range(event_number):
-        baseline_view[coordinate_view[event_id, 0] + 1:coordinate_view[event_id, 1]] = (
-            calculation_trace_view[coordinate_view[event_id, 0] + 1:coordinate_view[event_id, 1]])
+        baseline_view[coordinate_view[event_id, 0]:coordinate_view[event_id, 1] + 1] = (
+        calculation_trace_view[coordinate_view[event_id, 0]:coordinate_view[event_id, 1] + 1])
 
     # Final compute threshold using std as it is more accurate when outliers are no longer present
     threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate),
-                            results[-1].event_coordinates, method='std')
+                            results[-2].event_coordinates, method='std')
     # Store the final vectors
-    results.append(Iteration(label='Final', args=args, trace=trace, filtered_trace=filtered_trace, baseline=baseline,
-                             threshold=threshold, calculation_trace=calculation_trace,
-                             trace_stats=results[-1].trace_stats))
+    current = Iteration(label='Final', args=args, trace=trace, filtered_trace=filtered_trace, baseline=baseline,
+                        threshold=threshold, calculation_trace=calculation_trace, trace_stats=results[-1].trace_stats)
     # Final extraction is biphasic
-    results[-1].event_coordinates = locate_events(trace, filtered_trace, baseline, threshold, 'biphasic')
-    results[-1].event_stats = event_statistics(results[-1].event_coordinates)
+    current.event_coordinates = locate_events(trace, filtered_trace, baseline, threshold, 'biphasic')
+    current.event_stats = event_statistics(current.event_coordinates)
 
     # Expected number of extractions which are not events
-    results[-1].event_stats['False Positives'], results[-1].event_stats['Significant Events'] = expected_outliers(
+    current.event_stats['False Positives'], current.event_stats['Significant Events'] = expected_outliers(
         trace,
         baseline,
         threshold,
-        results[-1].event_coordinates,
+        current.event_coordinates,
         z_score
     )
-
-    return results[-1].event_coordinates, baseline, results
+    results.append(current)
+    return current.event_coordinates, baseline, results
 
 
 @cython.boundscheck(False)
@@ -573,6 +574,7 @@ def trace_statistics(
     with catch_warnings():
         filterwarnings('ignore')
         simplefilter('ignore')
+        results['Overall'] = shapiro(adjusted).statistic
         q1, q3 = quantile(adjusted, [0.25, 0.75])
         results['Positive Statistic'] = shapiro(adjusted[where(adjusted > q3)]).statistic
         results['Negative Statistic'] = shapiro(adjusted[where(adjusted < q1)]).statistic
@@ -603,7 +605,7 @@ def sort_coordinates(trace: ndarray, baseline: ndarray, event_coordinates: cytho
     assert trace.shape == baseline.shape
 
     if len(event_coordinates) == 0:
-        return asarray([], dtype=int64)
+        return zeros((0, 2), dtype=int64)
     # Baseline adjust the trace
     adjusted = trace - baseline
 
@@ -719,13 +721,14 @@ def event_replacer(
     padded_trace[:] = trace
     if replace_gap == 0 and replace_factor == 0:
         for event_id in range(event_number):
-            padded_trace[event_coordinates[event_id, 0] + 1:event_coordinates[event_id, 1]] = (
-                        baseline[event_coordinates[event_id, 0] + 1:event_coordinates[event_id, 1]])
+            padded_trace[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1] = (
+                        baseline[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1])
         return asarray(padded_trace, dtype=DTYPE)
 
     # Pad now to avoid padding in the loop (largest event)
-    longest: cython.int = int(ceil(max([event[1] - (event[0] + 1) for event in event_coordinates]) *
-                              (replace_factor + replace_gap)))
+    longest: cython.longlong = int(ceil(max([(event[1] - event[0]) + 1 for event in event_coordinates]) *
+                                  (replace_factor + replace_gap)))
+
     if longest > len(trace):
         padded_trace = concatenate((trace[0] * ones(longest - len(trace)), trace[::-1], trace,
                                     trace[::-1], trace[-1] * ones(longest - len(trace))))
@@ -733,19 +736,19 @@ def event_replacer(
         padded_trace = concatenate((trace[:longest][::-1], trace, trace[-longest:][::-1]))
     padded_trace: cython.double[::1] = padded_trace
 
-    # We remove the events in order of largest to smallest (see: sort_coordinates)
+    # We remove the events in order of largest to smallest (see: sort_coordinates())
     event_length: cython.longlong
     event_start: cython.longlong
     event_end: cython.longlong
-    length: cython.long
+    length: cython.longlong
     window: cython.double[::1]
     segment: cython.double[::1]
     filtered_segment: cython.double[::1]
     for event_id in range(event_number):
         # Adjust for padding, with extra sauce
-        event_length = event_coordinates[event_id, 1] - (event_coordinates[event_id, 0] + 1)
-        event_start = (event_coordinates[event_id, 0] + 1) + longest
-        event_end = event_coordinates[event_id, 1] + longest
+        event_length = (event_coordinates[event_id, 1] - event_coordinates[event_id, 0]) + 1
+        event_start = event_coordinates[event_id, 0] + longest
+        event_end = event_coordinates[event_id, 1] + longest + 1
 
         # Create the filter window
         length = int(round(event_length * (replace_factor + replace_gap)))
@@ -798,7 +801,7 @@ def locate_events(
     # Regular trace for threshold crossing indices
     threshold_idxs: cython.longlong[::1] = threshold_crosses(trace, baseline, threshold, event_direction)
     if len(threshold_idxs) == 0:
-        return asarray([], dtype=int64)
+        return zeros((0, 2), dtype=int64)
     # Iterate to find bounds
     event_coordinates = event_bounds(threshold_idxs, baseline_idxs)
 
@@ -988,7 +991,7 @@ def thresholder(
 
         # Baseline adjusted segment where events are masked
         current_segment = adjusted[start:end][where(event_mask[start:end] == 0)]
-        if len(current_segment) == 0:
+        if len(current_segment) < 2:
             current_segment = adjusted_view[start:end]
 
         if method == 'iqr':
@@ -1032,25 +1035,45 @@ def threshold_crosses(
     adjusted = trace - baseline
 
     # Sign the trace then difference to find zero crossings (wrt the threshold)
-    crosses = zeros(trace.shape, dtype=int64)
+    up_crosses = zeros(trace.shape, dtype=int64)
+    if event_direction == 'up' or event_direction == 'biphasic':
+        up_crosses = where(diff(sign(adjusted - threshold)) != 0)[0]
+
+        # Make sure that the start and end are pairs
+        if len(up_crosses) > 0:
+            end_idx = up_crosses[len(up_crosses) - 1]
+            if diff(sign(adjusted[end_idx:end_idx + 2] - threshold[end_idx:end_idx + 2])) > 0:
+                up_crosses = concatenate([up_crosses, [len(trace) - 1]])
+
+            start_idx = up_crosses[0]
+            if diff(sign(adjusted[start_idx:start_idx + 2] - threshold[start_idx:start_idx + 2])) < 0:
+                up_crosses = concatenate([[0], up_crosses])
+
+            assert len(up_crosses) % 2 == 0
+        else:
+            up_crosses = asarray([], dtype=int64)
+
+    down_crosses = zeros(trace.shape, dtype=int64)
+    if event_direction == 'down' or event_direction == 'biphasic':
+        down_crosses = where(diff(sign(adjusted + threshold)) != 0)[0]
+
+        # Make sure that the start and end are pairs
+        if len(down_crosses) > 0:
+            end_idx = down_crosses[len(down_crosses) - 1]
+            if diff(sign(adjusted[end_idx:end_idx + 2] + threshold[end_idx:end_idx + 2])) < 0:
+                down_crosses = concatenate([down_crosses, [len(trace) - 1]])
+
+            start_idx = down_crosses[0]
+            if diff(sign(adjusted[start_idx:start_idx + 2] + threshold[start_idx:start_idx + 2])) > 0:
+                down_crosses = concatenate([[0], down_crosses])
+
+            assert len(down_crosses) % 2 == 0
+        else:
+            down_crosses = asarray([], dtype=int64)
+
     if event_direction == 'up':
-        crosses = where(diff(sign(adjusted - threshold)) != 0)[0]
+        return up_crosses
     elif event_direction == 'down':
-        crosses = where(diff(sign(adjusted + threshold)) != 0)[0]
+        return down_crosses
     else:
-        crosses = sort(concatenate((where(diff(sign(adjusted + threshold)) != 0)[0],
-                                    where(diff(sign(adjusted - threshold)) != 0)[0])))
-
-    if not len(crosses):
-        return crosses
-
-    # Check the first and last to make sure they are a pair
-    trace_length: cython.size_t = len(trace)
-    if abs(adjusted[crosses[0] + 1]) < threshold[crosses[0] + 1]:
-        crosses = concatenate([[0], crosses])
-    if abs(adjusted[crosses[len(crosses) - 1] + 1]) > threshold[crosses[len(crosses) - 1] + 1]:
-        crosses = concatenate([crosses, [trace_length - 1]])
-
-    assert len(crosses) % 2 == 0
-
-    return crosses
+        return sort(concatenate((up_crosses, down_crosses)))
