@@ -7,7 +7,7 @@ from typing import Optional
 from stochastic.processes.noise import FractionalGaussianNoise as Fgn
 from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
 from stochastic.processes.noise import VioletNoise as Vn
-from numpy import mean, std, zeros, arange, sqrt, where
+from numpy import mean, std, zeros, arange, sqrt, pi
 from numpy.random import default_rng
 from scipy.signal import get_window
 from copy import deepcopy
@@ -44,9 +44,7 @@ def simulate_trace(
         }
     if baseline_dict is None:
         baseline_dict = {
-            'offset': 0,
-            'change': 0,
-            'type': 'linear'
+            'voltage': 0,
         }
 
     # Simulate wGn to start
@@ -96,8 +94,7 @@ def simulate_trace(
     events = [{'ID': i + 1, **event} for i, event in enumerate(events)]
 
     # Add the baseline
-    baseline = simulate_baseline(baseline_dict['offset'], baseline_dict['change'], baseline_dict['type'], length,
-                                 sample_rate)
+    baseline = simulate_baseline(length, sample_rate, **baseline_dict)
     trace += baseline
 
     return trace, coordinate_trace, events, baseline
@@ -133,33 +130,42 @@ def simulate_regime(alpha: float, sigma: float, length: int):
     regime_std = std(regime)
     for i in range(length):
         regime[i] += (sigma - regime_std) * ((regime[i] - regime_mean) / regime_std)
+    regime -= mean(regime)
 
     return regime
 
 
-def simulate_baseline(offset: float, change: float, baseline_type: str, length: int, sample_rate: int):
+def simulate_baseline(
+    length: int,
+    sample_rate: int,
+    voltage: float,
+    resistance: Optional[float] = None,
+    change: Optional[float] = None,
+    cottrell_numerator: Optional[float] = None,
+):
     """
     Simulate a baseline.
 
     Args:
-        offset (float): The initial offset of the baseline.
-        change (float): The change in the baseline over time.
-        baseline_type (str): The type of baseline ('constant', 'cottrell' or 'linear').
         length (int): The length of the baseline.
         sample_rate (int): The sample rate of the trace.
-
+        voltage (float): The initial voltage offset of the baseline.
+        resistance (float, optional): The initial resistance.
+        change (float, optional): The change in the resistance over time.
+        cottrell_numerator (float, optional): The numerator of the Cottrell equation.
     Returns:
         list: The simulated baseline.
     """
 
-    if baseline_type == 'constant':
-        baseline = [offset] * length
-    elif baseline_type == 'cottrell':
-        time_vector = arange(1, length + 1) / sample_rate
-        baseline = offset + (change / sqrt(time_vector))
+    time_vector = arange(1, length + 1) / sample_rate
+    if resistance is None:
+        baseline = [voltage] * length
+    elif change is None:
+        baseline = [voltage / resistance] * length
+    elif cottrell_numerator is None:
+        baseline = voltage / (resistance + (change * time_vector))
     else:
-        change = change / length
-        baseline = [offset + i * change for i in range(length)]
+        baseline = voltage / (resistance + (change * time_vector)) + cottrell_numerator / sqrt(time_vector)
 
     return baseline
 
@@ -205,7 +211,7 @@ def simulate_events(
     # Generate the events
     events = []
     windows = ['boxcar', 'triang', 'blackman', 'hamming', 'hann', 'bartlett', 'flattop', 'parzen', 'bohman',
-               'blackmanharris', 'nuttall', 'barthann', 'cosine', 'exponential', 'tukey', 'taylor', 'lanczos']
+               'blackmanharris', 'nuttall', 'barthann', 'cosine', 'tukey', 'taylor', 'lanczos']
     for i in range(event_number):
         current_window = windows[rng.integers(0, len(windows))] if window == 'mixed' else window
         event_vector = get_window(current_window, int(durations[i]))

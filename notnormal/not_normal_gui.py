@@ -59,7 +59,7 @@ class CustomFigureCanvas(FigureCanvasTkAgg):
         if self.after_id:
             self.root.after_cancel(self.after_id)
         func = super(CustomFigureCanvas, self).resize
-        self.after_id = self.root.after(100, func, event)
+        self.after_id = self.root.after(50, func, event)
 
 class FeatureWindow(tk.Toplevel):
     def __init__(self, master, events):
@@ -1781,7 +1781,7 @@ class NotNormalGUI(tk.Tk):
             self.trace_information['duration'].set(f'{self.time_vector[-1] - self.time_vector[0]:.1f}')
 
     @cython.boundscheck(False)
-    def update_figure(self, title=None, retain_view=True):
+    def update_figure(self, title: str = None, retain_view: bool = True):
         if self.widgets['analysis_view']['fig'].axes:
             ax = self.widgets['analysis_view']['fig'].axes[0]
         else:
@@ -1839,11 +1839,11 @@ class NotNormalGUI(tk.Tk):
 
         # Set limits
         if not retain_view:
-            self.widgets['analysis_view']['slider'].reset()
             ax.relim()
             ax.autoscale(True)
             self.widgets['analysis_view']['toolbar'].update()
             self.widgets['analysis_view']['toolbar'].push_current()
+            self.update_slider()
 
         # Set title
         if title:
@@ -1960,7 +1960,7 @@ class NotNormalGUI(tk.Tk):
         self.after_id = self.after(100, self.update_figure_xlimits, limits)
 
     def update_figure_xlimits(self, limits):
-        if limits == self.widgets['analysis_view']['fig'].axes[0].get_xlim():
+        if np.all(np.round(limits, 5) == np.round(self.widgets['analysis_view']['fig'].axes[0].get_xlim(), 5)):
             return
 
         self.after_id = None
@@ -1971,12 +1971,12 @@ class NotNormalGUI(tk.Tk):
 
     def update_slider(self):
         slider = self.widgets['analysis_view']['slider']
-        xlim = self.widgets['analysis_view']['fig'].axes[0].get_xlim()
-        if slider.val == xlim:
+        limits = self.widgets['analysis_view']['fig'].axes[0].get_xlim()
+        if np.all(np.round(slider.val, 5) == np.round(limits, 5)):
             return
 
         slider.eventson = False
-        slider.set_val(xlim)
+        slider.set_val(limits)
         slider.eventson = True
 
     def update_figure_style(self, key):
@@ -2024,7 +2024,7 @@ class NotNormalGUI(tk.Tk):
         else:
             self.toggle_results('hide')
 
-    def toggle_landing_page(self, toggle=None):
+    def toggle_landing_page(self, toggle: str = None):
         if toggle is None and self.widgets['landing']['main'].winfo_manager():
             toggle = 'hide'
         elif toggle is None:
@@ -2051,7 +2051,7 @@ class NotNormalGUI(tk.Tk):
             self.state('normal')
             self.resizable(False, False)
 
-    def toggle_load(self, toggle=None):
+    def toggle_load(self, toggle: str = None):
         if toggle is None and self.windows['load'].winfo_manager():
             toggle = 'hide'
         elif toggle is None:
@@ -2065,7 +2065,7 @@ class NotNormalGUI(tk.Tk):
                                       padx=(WINDOW_PADDING, 0))
             self.windows['left'].grid(row=0, column=0, sticky="nsew")
 
-    def toggle_analyse(self, toggle=None):
+    def toggle_analyse(self, toggle: str = None):
         if toggle is None and self.windows['analyse'].winfo_manager():
             toggle = 'hide'
         elif toggle is None:
@@ -2078,7 +2078,7 @@ class NotNormalGUI(tk.Tk):
             self.windows['analyse'].grid(row=1, column=0, sticky="nsew", pady=WINDOW_PADDING, padx=(WINDOW_PADDING, 0))
             self.windows['left'].grid(row=0, column=0, sticky="nsew")
 
-    def toggle_analysis_view(self, toggle=None):
+    def toggle_analysis_view(self, toggle: str = None):
         if toggle is None and self.windows['analysis_view'].winfo_manager():
             toggle = 'hide'
         elif toggle is None:
@@ -2091,7 +2091,7 @@ class NotNormalGUI(tk.Tk):
             self.windows['analysis_view'].grid(row=0, column=0, sticky="nsew", pady=WINDOW_PADDING, padx=WINDOW_PADDING)
             self.windows['center'].grid(row=0, column=1, sticky="nsew")
 
-    def toggle_analysis_view_options(self, toggle=None):
+    def toggle_analysis_view_options(self, toggle: str = None):
         if toggle is None and self.windows['analysis_view_options'].winfo_manager():
             toggle = 'hide'
         elif toggle is None:
@@ -2105,7 +2105,7 @@ class NotNormalGUI(tk.Tk):
             self.windows['analysis_view_options'].grid(row=3, column=0, sticky="nsew", padx=WINDOW_PADDING,
                                                        pady=(0, WINDOW_PADDING))
 
-    def toggle_results(self, toggle=None):
+    def toggle_results(self, toggle: str = None):
         if toggle is None and self.windows['results'].winfo_manager():
             toggle = 'hide'
         elif toggle is None:
@@ -2435,32 +2435,31 @@ class NotNormalGUI(tk.Tk):
         events = self.analysis_results[title].events
         # Get the event coordinates
         event_coordinates = events.get(event_id)['Coordinates']
-        extra = (event_coordinates[1] - event_coordinates[0]) * 20
+        extra = (event_coordinates[1] - event_coordinates[0]) * 10
         start = event_coordinates[0] - extra if event_coordinates[0] - extra > 0 else 0
         end = event_coordinates[1] + extra if event_coordinates[1] + extra < len(self.trace) else len(self.trace) - 1
 
         # Flash the event
         def remove():
-            if line[0] in ax.get_lines():
+            try:
                 line[0].remove()
-                self.widgets['analysis_view']['fig'].canvas.draw_idle()
-                self.widgets['analysis_view']['fig'].canvas.flush_events()
+            except:
+                return
+            self.widgets['analysis_view']['fig'].canvas.draw_idle()
+            self.widgets['analysis_view']['fig'].canvas.flush_events()
 
         ax = self.widgets['analysis_view']['fig'].axes[0]
+        line = ax.plot(self.time_vector[event_coordinates[0]:event_coordinates[1] + 1],
+                       self.trace[event_coordinates[0]:event_coordinates[1] + 1], 'r', linewidth=3, zorder=8)
         trace_min = np.min(self.trace[start:end])
         trace_max = np.max(self.trace[start:end])
         difference = 0.5 * abs(trace_max - trace_min)
         ax.set(xlim=(start * self.time_step + self.time_vector[0], end * self.time_step + self.time_vector[0]),
                ylim=(trace_min - difference, trace_max + difference))
-        line = ax.plot(self.time_vector[event_coordinates[0]:event_coordinates[1] + 1],
-                       self.trace[event_coordinates[0]:event_coordinates[1] + 1], 'r', linewidth=3, zorder=8)
         self.widgets['analysis_view']['toolbar'].push_current()
         self.widgets['analysis_view']['fig'].canvas.draw_idle()
         self.widgets['analysis_view']['fig'].canvas.flush_events()
-        try:
-            self.after(500, remove)
-        except:
-            pass
+        self.after(500, remove)
 
     def pick_event(self, event):
         # Convert point to event coordinates
@@ -2554,6 +2553,13 @@ class NotNormalGUI(tk.Tk):
                                            self.analysis_options['estimate_cutoff'].get(), int(1 / self.time_step))
         events.add_feature('Max Cutoff', max_cutoffs)
         self.analysis_results[label].events = events
+
+        # Update the results window
+        self.update_results()
+        self.update()
+        # Show the vectors
+        self.update_figure(title=label)
+
         # Update the direction for estimate only
         if label == 'Estimate':
             self.analysis_options['event_direction'].set(self.analysis_results[label].event_direction)
@@ -2566,12 +2572,6 @@ class NotNormalGUI(tk.Tk):
             self.analysis_results[label].event_stats['Max Cutoff'] = self.analysis_options['estimate_cutoff'].get()
         self.analysis_options['cutoff'].set(np.round(self.analysis_results[label].event_stats['Max Cutoff'], 2))
         self.flash_entry(self.widgets['analyse']['cutoff_input'])
-
-        # Update the results window
-        self.update_results()
-        self.update()
-        # Show the vectors
-        self.update_figure(title=label)
 
     def load_trace(self):
         if self.flags['running']:
@@ -2623,18 +2623,16 @@ class NotNormalGUI(tk.Tk):
         self.trace = trace
         self.time_vector = time_vector
         self.time_step = time_step
-        # Set the z-score
-        self.analysis_options['z_score'].set(np.round(norm.ppf(1 - ((1 / len(self.trace)) / 2)), 3))
-        self.default_analysis_options['z_score'] = self.analysis_options['z_score'].get()
-        self.flash_entry(self.widgets['analyse']['z_score_input'])
         # Show the trace information and trace vector
         self.update_load()
         # Initialise the slider
         self.init_slider()
         # Update the figure
         self.update_figure(title='Trace', retain_view=False)
-        # Update the slider
-        self.update_slider()
+        # Set the z-score
+        self.analysis_options['z_score'].set(np.round(norm.ppf(1 - ((1 / len(self.trace)) / 2)), 3))
+        self.default_analysis_options['z_score'] = self.analysis_options['z_score'].get()
+        self.flash_entry(self.widgets['analyse']['z_score_input'])
 
         # Set the flag
         self.flags['loaded'] = True

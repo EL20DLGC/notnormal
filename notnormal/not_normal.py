@@ -66,7 +66,7 @@ def not_normal(
 
     # Default to 1 expected outlier per trace (computed on length, of course)
     if z_score is None:
-        z_score = norm.ppf(1 - ((1 / len(trace)) / 2))
+        z_score = float(norm.ppf(1 - ((1 / len(trace)) / 2)))
 
     # Default 3-point median filter for bounding
     filtered_trace = bounds_filter(trace, bounds_window)
@@ -252,7 +252,6 @@ def iterate(
 
     # Iterate until the stopping criterion is met
     calculation_trace = trace.copy()
-    previous = (zeros(trace.shape[0], dtype=DTYPE), zeros(trace.shape[0], dtype=DTYPE))
     i: cython.int = 1
     while True:
         current = Iteration(label=f'Iteration {i}', args=args, trace=trace, filtered_trace=filtered_trace)
@@ -292,9 +291,9 @@ def iterate(
         results.append(current)
         i += 1
 
-    baseline, calculation_trace = previous
+    #baseline, calculation_trace = previous
     # Now that all events are surely removed, the calculation trace IS the baseline at event locations
-    coordinate_view: cython.longlong[:, ::1] = results[-2].event_coordinates
+    coordinate_view: cython.longlong[:, ::1] = results[-1].event_coordinates
     baseline_view: cython.double[::1] = baseline
     calculation_trace_view: cython.double[::1] = calculation_trace
     event_id: cython.size_t
@@ -366,15 +365,15 @@ def initial_estimate(
         filtered_trace=filtered_trace
     )
 
-    # (1) Remove events from the side of most influence
+    # (1) Remove events from the side of most influence (save this initial threshold)
     trace_view: cython.double[::1] = trace
     baseline = baseline_filter(trace_view, cutoff, sample_rate)
-    threshold = thresholder(trace, baseline, z_score, int(threshold_window * sample_rate))
+    initial_threshold = thresholder(trace, baseline, z_score, int(threshold_window * sample_rate))
     # Calculate trace statistics to determine the starting direction (most influence)
     results.trace_stats = trace_statistics(trace, baseline)
     results.event_direction = 'up' if results.trace_stats['Influence'] > 0 else 'down'
     # Locate and replace events
-    event_coordinates: cython.longlong[:, ::1] = locate_events(trace, filtered_trace, baseline, threshold,
+    event_coordinates: cython.longlong[:, ::1] = locate_events(trace, filtered_trace, baseline, initial_threshold,
                                                                results.event_direction)
     event_coordinates: cython.longlong[:, ::1]  = sort_coordinates(trace, baseline, event_coordinates)
     calculation_trace = event_replacer(trace_view, baseline, event_coordinates, replace_factor, replace_gap)
@@ -395,8 +394,8 @@ def initial_estimate(
     results.event_coordinates = locate_events(trace, filtered_trace, results.baseline, results.threshold,'biphasic')
     results.event_stats = event_statistics(results.event_coordinates)
 
-    # (4) Calculate the required cutoffs
-    max_cutoffs = calculate_cutoffs(trace, results.baseline, results.threshold, results.event_coordinates, cutoff,
+    # (4) Calculate the required cutoffs (using the initial threshold)
+    max_cutoffs = calculate_cutoffs(trace, results.baseline, initial_threshold, results.event_coordinates, cutoff,
                                     sample_rate)
     # Q1 of the required cutoffs, original needs to be added on top
     calculated_cutoff: cython.double
