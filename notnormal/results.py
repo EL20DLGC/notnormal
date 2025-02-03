@@ -107,6 +107,19 @@ class Events:
         if event:
             return event[0]
 
+    def remove(self, event_id):
+        """
+        Remove an event dictionary by its ID.
+
+        Args:
+            event_id (int): The ID of the event dictionary to remove.
+        """
+
+        if not self.events:
+            return
+
+        self.events = [event for event in self if event.get('ID') != event_id]
+
     def get_feature(self, key: str, event_id: list[int] = None):
         """
         Get a feature from all event dictionaries.
@@ -166,6 +179,7 @@ class Iteration:
         filtered_trace (ndarray, optional): The filtered version of the input trace. Default is None.
         baseline (ndarray, optional): The baseline of the trace. Default is None.
         threshold (ndarray, optional): The threshold for event detection. Default is None.
+        initial_threshold (ndarray, optional): The first computed threshold. Default is None.
         calculation_trace (ndarray, optional): The trace used for calculations. Default is None.
         trace_stats (dict, optional): Statistics for the trace. Default is None.
         event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
@@ -179,6 +193,7 @@ class Iteration:
     filtered_trace: Optional[ndarray] = None
     baseline: Optional[ndarray] = None
     threshold: Optional[ndarray] = None
+    initial_threshold: Optional[ndarray] = None
     calculation_trace: Optional[ndarray] = None
     trace_stats: Optional[dict] = None
     event_coordinates: Optional[ndarray] = None

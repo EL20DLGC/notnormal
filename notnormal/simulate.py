@@ -6,8 +6,8 @@ data.
 from typing import Optional
 from stochastic.processes.noise import FractionalGaussianNoise as Fgn
 from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
-from stochastic.processes.noise import VioletNoise as Vn
-from numpy import mean, std, zeros, arange, sqrt, pi
+from stochastic.processes.noise import VioletNoise as Vn, BlueNoise as Bn
+from numpy import mean, std, zeros, arange, sqrt
 from numpy.random import default_rng
 from scipy.signal import get_window
 from copy import deepcopy
@@ -56,11 +56,9 @@ def simulate_trace(
         # Get the c value from the crossover and alpha value
         gamma = (2 * regime[0]) - 1
         c = noise_power * (regime[1] ** gamma)
-        # Then get the mean value
-        f = arange(sample_rate / length, (sample_rate / 2) + 1, 0.1)
-        regime_mean = mean(c / (f ** gamma))
-        # Then convert the mean to the standard deviation
-        regime_std = sqrt(regime_mean * (sample_rate / 2))
+        # Integrate and get the standard deviation
+        integral = lambda x: c * ((x ** (1 - gamma)) / (1 - gamma))
+        regime_std = sqrt(integral(sample_rate / 2) - integral(sample_rate / length))
         # Sum the noise
         noise += simulate_regime(regime[0], regime_std, length)
 
@@ -115,15 +113,19 @@ def simulate_regime(alpha: float, sigma: float, length: int):
 
     if 1 < alpha <= 2:  # fBm
         regime = Fbm(hurst=alpha - 1, t=length)
-        regime = regime.sample(length - 1)
+        regime = regime.sample(length)[1:]
     elif 0 < alpha <= 1:  # fGn
         regime = Fgn(hurst=alpha, t=length)
         regime = regime.sample(length)
     elif alpha == -0.5:  # Capacitive noise
         regime = Vn(t=length)
-        regime = regime.sample(length - 1)
+        regime = regime.sample(length)[1:]
+    elif alpha == 0: # Dielectric noise
+        regime = Bn(t=length)
+        regime = regime.sample(length)[1:]
     else:
-        raise ValueError("Alpha must be greater than 0 for fGn, greater than 1 for fBm or -0.5 for capacitive noise.")
+        raise ValueError("Alpha must be greater than 0 for fGn, greater than 1 for fBm, 0 for dielectric noise"
+                         " or -0.5 for capacitive noise.")
 
     # Rescale to get the desired standard deviation
     regime_mean = mean(regime)

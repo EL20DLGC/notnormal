@@ -179,12 +179,14 @@ def parallel_iterate(
     iteration = Iteration(label=f'Final', args=args, trace=trace, filtered_trace=filtered_trace)
     baselines = []
     thresholds = []
+    initial_thresholds = []
     calculation_traces = []
     event_coordinates = []
     current_len: cython.size_t = 0
     for result in results:
         baselines.append(result[-1][-1].baseline)
         thresholds.append(result[-1][-1].threshold)
+        initial_thresholds.append(result[-1][0].initial_threshold)
         calculation_traces.append(result[-1][-1].calculation_trace)
         if result[-1][-1].event_coordinates.size != 0:
             result[-1][-1].event_coordinates[:, 0] += current_len
@@ -194,6 +196,7 @@ def parallel_iterate(
 
     iteration.baseline = concatenate(baselines)
     iteration.threshold = concatenate(thresholds)
+    iteration.initial_threshold = concatenate(initial_thresholds)
     iteration.calculation_trace = concatenate(calculation_traces)
     iteration.event_coordinates = concatenate(event_coordinates)
     coordinates_view: cython.longlong[:, ::1] = iteration.event_coordinates
@@ -260,6 +263,10 @@ def iterate(
         threshold = thresholder(calculation_trace, baseline, z_score, int(threshold_window * sample_rate),
                                 results[-1].event_coordinates if i > 1 else None)
 
+        # For calculating maximum cutoffs
+        if i == 1:
+            current.initial_threshold = threshold
+
         if vector_results:
             current.baseline = baseline
             current.threshold = threshold
@@ -279,7 +286,6 @@ def iterate(
             event_direction = 'biphasic'
 
         # Locate events from the raw trace and calculate event statistics
-        previous = (baseline, calculation_trace)
         current.event_coordinates = locate_events(trace, filtered_trace, baseline, threshold, event_direction)
         current.event_coordinates = sort_coordinates(trace, baseline, current.event_coordinates)
         current.event_stats = event_statistics(current.event_coordinates)
@@ -291,7 +297,6 @@ def iterate(
         results.append(current)
         i += 1
 
-    #baseline, calculation_trace = previous
     # Now that all events are surely removed, the calculation trace IS the baseline at event locations
     coordinate_view: cython.longlong[:, ::1] = results[-1].event_coordinates
     baseline_view: cython.double[::1] = baseline
@@ -307,7 +312,8 @@ def iterate(
                             results[-2].event_coordinates, method='std')
     # Store the final vectors
     current = Iteration(label='Final', args=args, trace=trace, filtered_trace=filtered_trace, baseline=baseline,
-                        threshold=threshold, calculation_trace=calculation_trace, trace_stats=results[-1].trace_stats)
+                        threshold=threshold, calculation_trace=calculation_trace, trace_stats=results[-1].trace_stats,
+                        initial_threshold=results[0].initial_threshold)
     # Final extraction is biphasic
     current.event_coordinates = locate_events(trace, filtered_trace, baseline, threshold, 'biphasic')
     current.event_stats = event_statistics(current.event_coordinates)
@@ -368,13 +374,13 @@ def initial_estimate(
     # (1) Remove events from the side of most influence (save this initial threshold)
     trace_view: cython.double[::1] = trace
     baseline = baseline_filter(trace_view, cutoff, sample_rate)
-    initial_threshold = thresholder(trace, baseline, z_score, int(threshold_window * sample_rate))
+    results.initial_threshold = thresholder(trace, baseline, z_score, int(threshold_window * sample_rate))
     # Calculate trace statistics to determine the starting direction (most influence)
     results.trace_stats = trace_statistics(trace, baseline)
     results.event_direction = 'up' if results.trace_stats['Influence'] > 0 else 'down'
     # Locate and replace events
-    event_coordinates: cython.longlong[:, ::1] = locate_events(trace, filtered_trace, baseline, initial_threshold,
-                                                               results.event_direction)
+    event_coordinates: cython.longlong[:, ::1] = locate_events(trace, filtered_trace, baseline,
+                                                               results.initial_threshold, results.event_direction)
     event_coordinates: cython.longlong[:, ::1]  = sort_coordinates(trace, baseline, event_coordinates)
     calculation_trace = event_replacer(trace_view, baseline, event_coordinates, replace_factor, replace_gap)
 
@@ -395,8 +401,8 @@ def initial_estimate(
     results.event_stats = event_statistics(results.event_coordinates)
 
     # (4) Calculate the required cutoffs (using the initial threshold)
-    max_cutoffs = calculate_cutoffs(trace, results.baseline, initial_threshold, results.event_coordinates, cutoff,
-                                    sample_rate)
+    max_cutoffs = calculate_cutoffs(trace, results.baseline, results.initial_threshold, results.event_coordinates,
+                                    cutoff, sample_rate)
     # Q1 of the required cutoffs, original needs to be added on top
     calculated_cutoff: cython.double
     try:
@@ -404,7 +410,7 @@ def initial_estimate(
     except IndexError:
         calculated_cutoff = cutoff
     # Do not want to be above recommended antialiasing cutoff
-    results.event_stats['Max Cutoff'] = calculated_cutoff if calculated_cutoff < sample_rate // 5 else cutoff
+    results.event_stats['Max Cutoff'] = calculated_cutoff if calculated_cutoff < sample_rate // 5 else sample_rate // 5
 
     return results.event_stats['Max Cutoff'], results.event_direction, results
 
@@ -660,7 +666,7 @@ def calculate_cutoffs(
         damping_ratio = (max(vector) / (max(vector) - threshold[event_end]))
         # -3dB of boxcar by length
         max_cutoffs_view[event_id] = 0.442947 / (sqrt((len(vector) * damping_ratio) ** 2 - 1) * (1 / sample_rate))
-        max_cutoffs_view[event_id] += cutoff
+        max_cutoffs_view[event_id] = cutoff if max_cutoffs_view[event_id] < cutoff else max_cutoffs_view[event_id]
 
     return max_cutoffs
 
