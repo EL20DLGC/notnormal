@@ -5,10 +5,12 @@ This module provides classes for representing events and iterations of event det
 in (nano)electrochemical time series data.
 """
 
-from typing import Optional
+from typing import Any, Optional
 from dataclasses import dataclass
 from numpy import ndarray
+import cython
 
+COMPILED = cython.compiled
 
 @dataclass
 class Events:
@@ -17,11 +19,19 @@ class Events:
 
     Attributes:
         label (str): The label for the events.
-        events (list[dict], optional): A list of event dictionaries. Default is None.
+        events (list[dict[str, Any] | None): A list of event dictionaries. Default is None.
     """
 
     label: str
-    events: Optional[list[dict]] = None
+    events: Optional[list[dict[str, Any]]] = None
+
+    def __post_init__(self):
+        """
+        Post initialisation check
+        """
+
+        if self.events is None:
+            self.events = []
 
     def __iter__(self):
         """
@@ -31,10 +41,7 @@ class Events:
             dict: An event dictionary.
         """
 
-        if not self.events:
-            return
-        for i in self.events:
-            yield i
+        return iter(self.events)
 
     def __len__(self):
         """
@@ -44,11 +51,9 @@ class Events:
             int: The number of events.
         """
 
-        if self.events:
-            return len(self.events)
-        return 0
+        return len(self.events)
 
-    def __getitem__(self, event_id: int):
+    def __getitem__(self, event_id: int) -> Optional[dict[str, Any]]:
         """
         Get an event dictionary by its ID.
 
@@ -56,18 +61,18 @@ class Events:
             event_id (int): The ID of the event dictionary to retrieve.
 
         Returns:
-            dict: The event dictionary with the specified ID.
+            dict[str, Any] | None: The event dictionary with the specified ID.
         """
 
         return self.get(event_id)
 
-    def __setitem__(self, event_id: int, event: dict):
+    def __setitem__(self, event_id: int, event: dict[str, Any]):
         """
         Set an event dictionary by its ID.
 
         Args:
             event_id (int): The ID of the event dictionary to set.
-            event (dict): The event dictionary to set.
+            event (dict[str, Any]): The event dictionary to set.
         """
 
         for i, e in enumerate(self.events):
@@ -76,20 +81,19 @@ class Events:
                 return
         self.add(event)
 
-    def add(self, event: dict):
+    def add(self, event: dict[str, Any]):
         """
         Add an event dictionary to the events list.
 
         Args:
-            event (dict): The event dictionary to add.
+            event (dict[str, Any): The event dictionary to add.
         """
 
-        if self.events:
-            self.events += [event]
-        else:
-            self.events = [event]
+        if 'ID' not in event:
+            raise ValueError("Each event must contain an 'ID' key.")
+        self.events.append(event)
 
-    def get(self, event_id: int):
+    def get(self, event_id: int) -> Optional[dict[str, Any]]:
         """
         Get an event dictionary by its ID.
 
@@ -97,17 +101,12 @@ class Events:
             event_id (int): The ID of the event dictionary to retrieve.
 
         Returns:
-            dict: The event dictionary with the specified ID.
+            dict[str, Any]: The event dictionary with the specified ID.
         """
 
-        if not self.events:
-            return
+        return next((event for event in self.events if event.get('ID') == event_id), None)
 
-        event = [event for event in self if event.get('ID') == event_id]
-        if event:
-            return event[0]
-
-    def remove(self, event_id):
+    def remove(self, event_id: int):
         """
         Remove an event dictionary by its ID.
 
@@ -115,30 +114,24 @@ class Events:
             event_id (int): The ID of the event dictionary to remove.
         """
 
-        if not self.events:
-            return
+        self.events = [event for event in self.events if event.get('ID') != event_id]
 
-        self.events = [event for event in self if event.get('ID') != event_id]
-
-    def get_feature(self, key: str, event_id: list[int] = None):
+    def get_feature(self, key: str, event_ids: Optional[list[int]] = None) -> list[Any]:
         """
         Get a feature from all event dictionaries.
 
         Args:
             key (str): The key of the feature to retrieve.
-            event_id (list[int], optional): A list of event IDs to retrieve the feature from. Default is None (all events).
+            event_ids (list[int] | None): A list of event IDs to retrieve the feature from. Default is None (all events).
 
         Returns:
-            list: A list of feature values.
+            list[Any]: A list of feature values.
         """
 
-        if not self.events:
-            return
+        if event_ids is None:
+            return [i.get(key) for i in self.events]
 
-        if event_id is None:
-            return [i.get(key) for i in self]
-
-        return [i.get(key) for i in self if i.get('ID') in event_id]
+        return [i.get(key) for i in self.events if i.get('ID') in event_ids]
 
     def add_feature(self, key: str, value: ndarray):
         """
@@ -149,23 +142,22 @@ class Events:
             value (ndarray): The values of the feature to add.
         """
 
-        if not self.events or len(self) != len(value):
-            return
+        if len(self.events) != len(value):
+            raise ValueError("Length of feature values must match number of events.")
 
-        for i, event in enumerate(self):
+        for i, event in enumerate(self.events):
             event[key] = value[i]
 
-    def add_features(self, features: dict):
+    def add_features(self, features: dict[str, ndarray]):
         """
         Add multiple features to all event dictionaries.
 
         Args:
-            features (dict): A dictionary of features to add.
+            features (dict[str, ndarray]): A dictionary of features to add.
         """
 
-        for key, value in features.items():
-            self.add_feature(key, value)
-
+        for key, values in features.items():
+            self.add_feature(key, values)
 
 @dataclass
 class Iteration:
@@ -175,16 +167,16 @@ class Iteration:
     Attributes:
         label (str): The label for the iteration.
         args (dict): The arguments used in the iteration.
-        trace (ndarray, optional): The input signal trace. Default is None.
-        filtered_trace (ndarray, optional): The filtered version of the input trace. Default is None.
-        baseline (ndarray, optional): The baseline of the trace. Default is None.
-        threshold (ndarray, optional): The threshold for event detection. Default is None.
-        initial_threshold (ndarray, optional): The first computed threshold. Default is None.
-        calculation_trace (ndarray, optional): The trace used for calculations. Default is None.
-        trace_stats (dict, optional): Statistics for the trace. Default is None.
-        event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
-        event_stats (dict, optional): Statistics for the detected events. Default is None.
-        events (Events, optional): The events detected in the iteration. Default is None.
+        trace (ndarray | None): The input signal trace. Default is None.
+        filtered_trace (ndarray | None): The filtered version of the input trace. Default is None.
+        baseline (ndarray | None): The baseline of the trace. Default is None.
+        threshold (ndarray | None): The threshold for event detection. Default is None.
+        initial_threshold (ndarray | None): The first computed threshold. Default is None.
+        calculation_trace (ndarray | None): The trace used for calculations. Default is None.
+        trace_stats (dict | None): Statistics for the trace. Default is None.
+        event_coordinates (ndarray | None): The coordinates of detected events. Default is None.
+        event_stats (dict | None): Statistics for the detected events. Default is None.
+        events (Events | None): The events detected in the iteration. Default is None.
     """
 
     label: str

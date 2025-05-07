@@ -28,7 +28,7 @@ from matplotlib.patches import Rectangle
 from matplotlib.collections import PathCollection
 from mpl_toolkits.mplot3d.art3d import Path3DCollection
 from matplotlib.widgets import RangeSlider
-from matplotlib import patheffects as pe, rc
+from matplotlib import patheffects as pe, rc, style as mplstyle
 from matplotlib.backend_bases import key_press_handler
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 from matplotlib.figure import Figure
@@ -38,13 +38,7 @@ from ttkbootstrap import Style, Floodgauge
 from notnormal import not_normal as nn
 from notnormal.results import Events
 
-if cython.compiled:
-    COMPILED = True
-    print('not_normal_gui compiled')
-else:
-    COMPILED = False
-    print('not_normal_gui not compiled')
-
+COMPILED = cython.compiled
 PADDING = 6
 WINDOW_PADDING = 3
 ENTRY_WIDTH = 9
@@ -403,9 +397,12 @@ class FeatureWindow(tk.Toplevel):
         widgets['canvas'].draw()
         # Toolbar
         widgets['toolbar'] = NavigationToolbar2Tk(widgets['canvas'], widgets['frame'], pack_toolbar=False)
-        widgets['toolbar'].children['!button4'].pack_forget()
-        for children in widgets['toolbar'].winfo_children():
-            children.configure(background='white')
+        for child in widgets['toolbar'].winfo_children():
+            child.pack_forget()
+            child.configure(background='white', border=1)
+        for child in widgets['toolbar'].winfo_children():
+            if child != widgets['toolbar'].children['!button4']:
+                child.pack(side=tk.LEFT)
         widgets['toolbar'].update()
         # Toolbar separator
         widgets['toolbar_separator'] = ttk.Separator(widgets['frame'])
@@ -862,7 +859,6 @@ class NotNormalGUI(tk.Tk):
         self.table_columns = ['ID', 'Area', 'Max Cutoff', 'Duration', 'Amplitude']
         # Trace information variables
         self.trace_information = dict()
-        self.path = None
         self.trace = None
         self.time_vector = None
         self.time_step = None
@@ -976,7 +972,12 @@ class NotNormalGUI(tk.Tk):
         # Misc
         self.style.configure('Horizontal.TFloodgauge', thickness=30, barsize=60)
         # Matplotlib
+        mplstyle.use('fast')
         rc('font', size=SMALL_FONT, family='sans-serif')
+        rc('grid', color='0.8', linewidth=0.5)
+        rc('path', simplify=True, simplify_threshold=0.111111111111)
+        rc('agg.path', chunksize=200000)
+        rc('lines', antialiased=True)
 
     def init_layout(self):
         # Main window
@@ -1028,20 +1029,28 @@ class NotNormalGUI(tk.Tk):
         self.bind('<o>', lambda event: self.toggle_analysis_view_options())
 
     def init_tooltips(self):
-        tooltip.Hovertip(self.widgets['load']['browse'], "Ctrl + B")
-        tooltip.Hovertip(self.widgets['analyse']['estimate'], "Ctrl + E")
-        tooltip.Hovertip(self.widgets['analyse']['iterate'], "Ctrl + I")
-        tooltip.Hovertip(self.widgets['results']['save'], "Ctrl + S")
-        tooltip.Hovertip(self.widgets['analysis_view']['options_toggle'], "O")
+        tooltip.Hovertip(self.widgets['load']['browse'], "Ctrl + B", hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['estimate'], "Ctrl + E", hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['iterate'], "Ctrl + I", hover_delay=300)
+        tooltip.Hovertip(self.widgets['results']['save'], "Ctrl + S", hover_delay=300)
+        tooltip.Hovertip(self.widgets['analysis_view']['options_toggle'], "O", hover_delay=300)
         tooltip.Hovertip(self.widgets['analyse']['bounds_input'],
-                         "Median filtering window size for bounding events")
-        tooltip.Hovertip(self.widgets['analyse']['estimate_cutoff_input'], 'Cutoff frequency for the estimate')
-        tooltip.Hovertip(self.widgets['analyse']['threshold_window_input'], 'Window size for threshold calculation')
-        tooltip.Hovertip(self.widgets['analyse']['z_score_input'], 'Z-score for threshold')
-        tooltip.Hovertip(self.widgets['analyse']['cutoff_input'], 'Cutoff frequency for the iteration')
-        tooltip.Hovertip(self.widgets['analyse']['event_direction_input'], 'Initial iteration event direction')
-        tooltip.Hovertip(self.widgets['analyse']['replace_factor_input'], 'Factor for replacing events')
-        tooltip.Hovertip(self.widgets['analyse']['replace_gap_input'], 'Gap for replacing events')
+                         "Median filtering window size for bounding events", hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['estimate_cutoff_input'], 'Cutoff frequency for the estimate',
+                         hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['threshold_window_input'], 'Window size for threshold calculation'
+                                                                            ' (estimate and iterate)', hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['z_score_input'], 'Z-score for threshold (estimate and iterate)',
+                         hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['cutoff_input'], 'Cutoff frequency for the iteration',
+                         hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['event_direction_input'], 'Initial iteration event direction',
+                         hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['replace_factor_input'], 'Factor for replacing events '
+                                                                          '(multiple of event width)', hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['replace_gap_input'], 'Gap for replacing events '
+                                                                       '(multiple of event width)', hover_delay=300)
+        tooltip.Hovertip(self.widgets['load']['units'], 'Amplitude: pA, Duration: ms, Area: pC', hover_delay=300)
 
     def init_landing_page(self):
         # Landing page
@@ -1133,6 +1142,9 @@ class NotNormalGUI(tk.Tk):
         self.windows['load'].rowconfigure(1, weight=1)
         self.windows['load_internal'].grid(row=1, column=0, sticky="nsew", padx=WINDOW_PADDING, pady=WINDOW_PADDING)
 
+        # Path information
+        self.trace_information['path'] = tk.StringVar()
+        self.trace_information['path'].set('')
         # Filename information
         self.widgets['load']['filename_label'] = ttk.Label(self.windows['load_internal'], text="Filename")
         self.trace_information['filename'] = tk.StringVar()
@@ -1161,6 +1173,20 @@ class NotNormalGUI(tk.Tk):
         self.trace_information['duration'].set('')
         self.widgets['load']['duration'] = ttk.Label(self.windows['load_internal'],
                                                      textvariable=self.trace_information['duration'])
+        self.widgets['load']['duration_separator'] = ttk.Separator(self.windows['load_internal'])
+        # Units
+        self.widgets['load']['units_label'] = ttk.Label(self.windows['load_internal'], text="Units")
+        self.trace_information['units'] = tk.StringVar()
+        self.trace_information['units'].set('pA')
+        self.widgets['load']['units'] = ttk.Combobox(
+            self.windows['load_internal'],
+            values=['A', 'mA', 'µA', 'nA', 'pA', 'fA'],
+            textvariable=self.trace_information['units'],
+            state='readonly',
+            width=ENTRY_WIDTH,
+            justify='center'
+        )
+        self.widgets['load']['units'].bind('<<ComboboxSelected>>', lambda _: self.update_units())
         # Browse button
         self.widgets['load']['browse'] = ttk.Button(self.windows['load_internal'], text="Browse", underline=0,
                                                     command=self.load_trace, style='secondary.Outline.TButton')
@@ -1186,8 +1212,13 @@ class NotNormalGUI(tk.Tk):
         self.windows['load_internal'].rowconfigure(6, weight=1)
         self.widgets['load']['duration_label'].grid(row=6, column=0, sticky="nsew", padx=PADDING)
         self.widgets['load']['duration'].grid(row=6, column=1, sticky="e", padx=PADDING)
+        self.widgets['load']['duration_separator'].grid(row=7, column=0, columnspan=2, sticky="nsew")
+        # Theme layout
+        self.windows['load_internal'].rowconfigure(8, weight=1)
+        self.widgets['load']['units_label'].grid(row=8, column=0, sticky="nsew", padx=PADDING)
+        self.widgets['load']['units'].grid(row=8, column=1, sticky="e", padx=PADDING)
         # Browse layout
-        self.widgets['load']['browse'].grid(row=7, column=0, columnspan=2, sticky="nsew", padx=PADDING,
+        self.widgets['load']['browse'].grid(row=9, column=0, columnspan=2, sticky="nsew", padx=PADDING,
                                             pady=(0, PADDING))
 
     def init_analyse(self):
@@ -1418,13 +1449,11 @@ class NotNormalGUI(tk.Tk):
                                                   pady=WINDOW_PADDING)
 
         # Create figure, axis and canvas
-        self.widgets['analysis_view']['fig'] = Figure(layout='tight')
+        self.widgets['analysis_view']['fig'] = Figure(layout='constrained')
         ax = self.widgets['analysis_view']['fig'].add_subplot(111)
-        ax.set_xlabel("Time (s)", fontsize=MEDIUM_FONT)
-        ax.set_ylabel("Current", fontsize=MEDIUM_FONT)
+        ax.set_xlabel("Time ($s$)", fontsize=MEDIUM_FONT)
+        ax.set_ylabel("Current" + f' (${self.trace_information['units'].get()}$)', fontsize=MEDIUM_FONT)
         # Create canvas
-        # self.widgets['analysis_view']['canvas'] = FigureCanvasTkAgg(self.widgets['analysis_view']['fig'],
-        #                                                             self.windows['analysis_view_figure'])
         self.widgets['analysis_view']['canvas'] = CustomFigureCanvas(self.widgets['analysis_view']['fig'],
                                                                     self.windows['analysis_view_figure'], self)
         self.widgets['analysis_view']['canvas'].draw()
@@ -1432,9 +1461,17 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['toolbar'] = NavigationToolbar2Tk(self.widgets['analysis_view']['canvas'],
                                                                         self.windows['analysis_view_figure'],
                                                                         pack_toolbar=False)
-        self.widgets['analysis_view']['toolbar'].children['!button4'].pack_forget()
-        for children in self.widgets['analysis_view']['toolbar'].winfo_children():
-            children.configure(background='white', border=0)
+        for child in self.widgets['analysis_view']['toolbar'].winfo_children():
+            child.pack_forget()
+            child.configure(background='white', border=1)
+        for child in self.widgets['analysis_view']['toolbar'].winfo_children():
+            if child != self.widgets['analysis_view']['toolbar'].children['!button4']:
+                child.pack(side=tk.LEFT)
+        # Reconfigure commands to downsample
+        for name in ('Home', 'Back', 'Forward'):
+            command = getattr(self.widgets['analysis_view']['toolbar'], name.lower())
+            btn = self.widgets['analysis_view']['toolbar']._buttons[name]
+            btn.configure(command=self.toolbar_wrapper(command))
         self.widgets['analysis_view']['toolbar'].update()
 
         # Progress bar
@@ -1456,7 +1493,6 @@ class NotNormalGUI(tk.Tk):
         self.windows['analysis_view_figure'].rowconfigure(2, weight=1)
         self.widgets['analysis_view']['canvas'].get_tk_widget().grid(row=2, column=0,  columnspan=2, sticky="nsew",
                                                                      padx=PADDING, pady=(PADDING, 0))
-
 
         # Slider figure frame
         self.windows['analysis_view_slider'] = ttk.Frame(self.windows['analysis_view_figure'])
@@ -1492,8 +1528,8 @@ class NotNormalGUI(tk.Tk):
         # Bind events
         self.widgets['analysis_view']['canvas'].mpl_connect("key_press_event",
                                                             partial(self.toolbar_key_press, 'analysis_view'))
-        self.widgets['analysis_view']['canvas'].mpl_connect("draw_event",
-                                                            lambda _: self.after(100, self.update_slider))
+        self.widgets['analysis_view']['canvas'].mpl_connect("draw_event", lambda _: self.after(100, self.update_slider))
+        self.widgets['analysis_view']['canvas'].mpl_connect("button_release_event", lambda _: self.update_figure_xlimits())
         self.widgets['analysis_view']['canvas'].mpl_connect("pick_event", self.pick_event)
 
     def init_slider(self):
@@ -1563,6 +1599,9 @@ class NotNormalGUI(tk.Tk):
                 ('calculation_trace', 'Calculation Trace'), ('filtered_trace', 'Filtered Trace'), ('events', 'Events')]
         options = [('show', 'bool', self.update_figure_show), ('linewidth', 'float', self.update_figure_linewidth),
                    ('colour', 'colour', self.update_figure_color), ('style', 'str', self.update_figure_style)]
+        # Fixed options
+        self.figure_options['zorder'] = dict(trace=2, calculation_trace=3, filtered_trace=4, baseline=5, threshold=6,
+                                             events=7)
 
         # Initialise the headings
         self.widgets['analysis_view']['lines'].rowconfigure(0, weight=1, uniform='options')
@@ -1615,14 +1654,14 @@ class NotNormalGUI(tk.Tk):
                         justify='center',
                         width=ENTRY_WIDTH
                     )
-                    self.widgets['analysis_view'][option[0]][key[0]].bind("<Return>", partial(option[2], key[0]))
-                    self.widgets['analysis_view'][option[0]][key[0]].bind("<FocusOut>", partial(option[2], key[0]))
+                    self.widgets['analysis_view'][option[0]][key[0]].bind("<Return>", lambda _: partial(option[2], key[0]))
+                    self.widgets['analysis_view'][option[0]][key[0]].bind("<FocusOut>", lambda _: partial(option[2], key[0]))
                     self.widgets['analysis_view'][option[0]][key[0]].configure(font=self.fonts['small'])
                 elif option[1] == 'colour':
                     self.figure_options[option[0]][key[0]] = tk.StringVar()
                     self.widgets['analysis_view'][option[0]][key[0]] = ttk.Button(
                         self.widgets['analysis_view']['lines'],
-                        command=partial(self.update_figure_color,key[0]),
+                        command=partial(option[2],key[0]),
                         width=ENTRY_WIDTH - 3,
                     )
                 elif option[1] == 'str':
@@ -1717,19 +1756,21 @@ class NotNormalGUI(tk.Tk):
             return
 
         # Reset the trace vectors
-        self.path = None
         self.trace = None
         self.time_vector = None
         self.time_step = None
         # Clear the trace information
         for key in self.trace_information:
             self.trace_information[key].set('')
+        self.trace_information['units'].set('pA')
         # Set the flags
         self.flags['loaded'] = False
 
     def reset_algorithm(self):
         for key in self.default_analysis_options:
             self.analysis_options[key].set(self.default_analysis_options[key])
+        # Disable iterate options
+        self.toggle_iterate_options(['disabled'])
 
     def reset_figure(self):
         # Reset the figure options
@@ -1791,12 +1832,14 @@ class NotNormalGUI(tk.Tk):
         # Reset the analysis view window
         self.reset_figure()
 
-    def update_load(self):
-        if self.path is not None:
-            if len(basename(self.path)) > 63:
-                self.trace_information['filename'].set(f'{basename(self.path)[0:60]}...')
+    def update_load(self, path):
+        self.trace_information['path'].set(path)
+
+        if path != '':
+            if len(basename(path)) > 63:
+                self.trace_information['filename'].set(f'{basename(path)[0:60]}...')
             else:
-                self.trace_information['filename'].set(basename(self.path))
+                self.trace_information['filename'].set(basename(path))
 
         if self.trace is not None:
             self.trace_information['samples'].set(f'{len(self.trace):.0f}')
@@ -1806,6 +1849,21 @@ class NotNormalGUI(tk.Tk):
 
         if self.time_vector is not None:
             self.trace_information['duration'].set(f'{self.time_vector[-1] - self.time_vector[0]:.1f}')
+
+    def update_units(self):
+        ax = self.widgets['analysis_view']['fig'].axes[0]
+        units = self.trace_information['units'].get()
+        ax.set_ylabel("Current" + f' (${units}$)', fontsize=MEDIUM_FONT)
+
+        if units == 'A':
+            tooltip.Hovertip(self.widgets['load']['units'], f'Amplitude: A, Duration: ms, Area: C',
+                             hover_delay=300)
+        else:
+            tooltip.Hovertip(self.widgets['load']['units'], f'Amplitude: {units[0]}A, Duration: ms, Area: {units[0]}C',
+                             hover_delay=300)
+        # Redraw
+        self.widgets['analysis_view']['fig'].canvas.draw_idle()
+        self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     @cython.boundscheck(False)
     def update_figure(self, title: str = None, retain_view: bool = True):
@@ -1817,41 +1875,36 @@ class NotNormalGUI(tk.Tk):
         if type(self.time_vector) is np.ndarray and self.time_step:
             # Clear lines except the trace
             for line in ax.get_lines():
-                if line.get_label() != 'trace':
                     line.remove()
+
+            # Get xlim
+            xlim = ax.get_xlim() if retain_view else (self.time_vector[0], self.time_vector[-1])
 
             # Plot the trace
             if type(self.trace) is np.ndarray and self.figure_options['show']['trace'].get():
-                ax.plot(self.time_vector, self.trace, label='trace', zorder=2)
+                ax.plot(*self.downsample_line(self.time_vector, self.trace, xlim), label='trace')
 
             # Plot the calculation trace
             if type(self.calculation_trace) is np.ndarray and self.figure_options['show']['calculation_trace'].get():
-                ax.plot(self.time_vector, self.calculation_trace, label='calculation_trace', zorder=3)
+                ax.plot(*self.downsample_line(self.time_vector, self.calculation_trace, xlim), label='calculation_trace')
 
             # Plot the filtered trace
             if type(self.filtered_trace) is np.ndarray and self.figure_options['show']['filtered_trace'].get():
-                ax.plot(self.time_vector, self.filtered_trace, label='filtered_trace', zorder=4)
+                ax.plot(*self.downsample_line(self.time_vector, self.filtered_trace, xlim), label='filtered_trace')
 
             # Plot the baseline
             if type(self.baseline) is np.ndarray and self.figure_options['show']['baseline'].get():
-                ax.plot(self.time_vector, self.baseline, label='baseline', zorder=5)
+                ax.plot(*self.downsample_line(self.time_vector, self.baseline, xlim), label='baseline')
 
             # Plot the threshold
             if (type(self.threshold) is np.ndarray and type(self.baseline) is np.ndarray and
                     self.figure_options['show']['threshold'].get()):
-                ax.plot(self.time_vector, self.baseline + self.threshold, label='threshold', zorder=6)
-                ax.plot(self.time_vector, self.baseline - self.threshold, label='threshold', zorder=6)
+                ax.plot(*self.downsample_line(self.time_vector, self.baseline + self.threshold, xlim), label='threshold')
+                ax.plot(*self.downsample_line(self.time_vector, self.baseline - self.threshold, xlim), label='threshold')
 
             # Plot the events
             if type(self.event_coordinates) is np.ndarray and self.figure_options['show']['events'].get():
-                xlist = []
-                ylist = []
-                for event in self.event_coordinates:
-                    xlist.extend(self.time_vector[event[0]:event[1] + 1])
-                    xlist.append(None)
-                    ylist.extend(self.trace[event[0]:event[1] + 1])
-                    ylist.append(None)
-                ax.plot(xlist, ylist, label='events', zorder=7, picker=True, pickradius=5)
+                ax.plot(*self.downsample_events(xlim), label='events', picker=True, pickradius=5)
 
             # Set visibility, colour, linewidth and linestyle
             for line in ax.get_lines():
@@ -1860,6 +1913,7 @@ class NotNormalGUI(tk.Tk):
                 line.set_color(self.figure_options['colour'][line.get_label()].get())
                 line.set_linewidth(self.figure_options['linewidth'][line.get_label()].get())
                 line.set_linestyle(self.figure_options['style'][line.get_label()].get())
+                line.set_zorder(self.figure_options['zorder'][line.get_label()])
 
         else:
             ax.clear()
@@ -1878,7 +1932,7 @@ class NotNormalGUI(tk.Tk):
 
         # Set labels and grid
         ax.set_xlabel("Time (s)", fontsize=MEDIUM_FONT)
-        ax.set_ylabel("Current", fontsize=MEDIUM_FONT)
+        ax.set_ylabel("Current" + f' (${self.trace_information['units'].get()}$)', fontsize=MEDIUM_FONT)
         ax.grid(self.figure_options['grid'].get())
         self.widgets['analysis_view']['canvas'].draw_idle()
         self.widgets['analysis_view']['canvas'].flush_events()
@@ -1908,39 +1962,28 @@ class NotNormalGUI(tk.Tk):
                 if key == line.get_label():
                     line.remove()
         else:
-            colour = self.figure_options['colour'][key].get()
-            linewidth = self.figure_options['linewidth'][key].get()
-            style = self.figure_options['style'][key].get()
+            xlim = ax.get_xlim()
+            lines = []
             if key == 'trace' and type(self.trace) is np.ndarray:
-                ax.plot(self.time_vector, self.trace, label='trace', color=colour, linewidth=linewidth, linestyle=style,
-                        zorder=2)
+                lines.append(ax.plot(*self.downsample_line(self.time_vector, self.trace, xlim), label='trace'))
             elif key == 'calculation_trace' and type(self.calculation_trace) is np.ndarray:
-                ax.plot(self.time_vector, self.calculation_trace, label='calculation_trace', color=colour,
-                        linewidth=linewidth, linestyle=style, zorder=3)
+                lines.append(ax.plot(*self.downsample_line(self.time_vector, self.calculation_trace, xlim), label='calculation_trace'))
             elif key == 'filtered_trace' and type(self.filtered_trace) is np.ndarray:
-                ax.plot(self.time_vector, self.filtered_trace, label='filtered_trace', color=colour,
-                        linewidth=linewidth, linestyle=style, zorder=4)
+                lines.append(ax.plot(*self.downsample_line(self.time_vector, self.filtered_trace, xlim), label='filtered_trace'))
             elif key == 'baseline' and type(self.baseline) is np.ndarray:
-                ax.plot(self.time_vector, self.baseline, label='baseline', color=colour, linewidth=linewidth,
-                        linestyle=style, zorder=5)
+                lines.append(ax.plot(*self.downsample_line(self.time_vector, self.baseline, xlim), label='baseline'))
             elif key == 'threshold' and type(self.threshold) is np.ndarray and type(self.baseline) is np.ndarray:
-                ax.plot(self.time_vector,
-                        self.baseline + self.threshold, label='threshold', color=colour, linewidth=linewidth,
-                        linestyle=style, zorder=6)
-                ax.plot(self.time_vector,
-                        self.baseline - self.threshold, label='threshold', color=colour, linewidth=linewidth,
-                        linestyle=style, zorder=6)
+                lines.append(ax.plot(*self.downsample_line(self.time_vector, self.baseline + self.threshold, xlim), label='threshold'))
+                lines.append(ax.plot(*self.downsample_line(self.time_vector, self.baseline - self.threshold, xlim), label='threshold'))
             elif key == 'events' and type(self.event_coordinates) is np.ndarray:
-                xlist = []
-                ylist = []
-                for event in self.event_coordinates:
-                    xlist.extend(self.time_vector[event[0]:event[1] + 1])
-                    xlist.append(None)
-                    ylist.extend(self.trace[event[0]:event[1] + 1])
-                    ylist.append(None)
-                ax.plot(xlist, ylist, label='events', color=colour, linewidth=linewidth, linestyle=style, zorder=7,
-                        picker=True, pickradius=5)
-
+                lines.append(ax.plot(*self.downsample_events(xlim), label='events', picker=True, pickradius=5))
+            # Set visibility, colour, linewidth and linestyle
+            for line in lines:
+                line = line[0]
+                line.set_color(self.figure_options['colour'][line.get_label()].get())
+                line.set_linewidth(self.figure_options['linewidth'][line.get_label()].get())
+                line.set_linestyle(self.figure_options['style'][line.get_label()].get())
+                line.set_zorder(self.figure_options['zorder'][line.get_label()])
         self.widgets['analysis_view']['fig'].canvas.draw_idle()
         self.widgets['analysis_view']['fig'].canvas.flush_events()
 
@@ -1966,7 +2009,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['fig'].canvas.draw_idle()
         self.widgets['analysis_view']['fig'].canvas.flush_events()
 
-    def update_figure_linewidth(self, key, event=None):
+    def update_figure_linewidth(self, key):
         if not self.widgets['analysis_view']['fig'].axes or not self.figure_options['show'][key].get():
             return
 
@@ -1981,27 +2024,34 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     def schedule_update_figure_xlimits(self, limits):
-        if self.after_id:
+        if self.after_id is not None:
             self.after_cancel(self.after_id)
 
-        self.after_id = self.after(100, self.update_figure_xlimits, limits)
+        self.after_id = self.after(50, self.update_figure_xlimits, limits)
 
-    def update_figure_xlimits(self, limits):
-        if np.all(np.round(limits, 5) == np.round(self.widgets['analysis_view']['fig'].axes[0].get_xlim(), 5)):
-            return
-
-        self.after_id = None
-        self.widgets['analysis_view']['fig'].axes[0].set_xlim(limits)
-        self.widgets['analysis_view']['toolbar'].push_current()
+    def update_figure_xlimits(self, limits = None):
+        if limits:
+            self.after_id = None
+            ax = self.widgets['analysis_view']['fig'].axes[0]
+            ax.set_xlim(limits)
+            # Downsample all lines
+            self.downsample_all()
+            if np.all(np.round(limits, 5) == np.round(ax.get_xlim(), 5)):
+                # Push state to toolbar
+                self.widgets['analysis_view']['toolbar'].push_current()
+        else:
+            mode = self.widgets['analysis_view']['toolbar'].mode
+            if mode not in (mode.ZOOM, mode.PAN):
+                return
+            # Downsample all lines
+            self.downsample_all()
+        # Redraw
         self.widgets['analysis_view']['fig'].canvas.draw_idle()
         self.widgets['analysis_view']['fig'].canvas.flush_events()
 
     def update_slider(self):
         slider = self.widgets['analysis_view']['slider']
         limits = self.widgets['analysis_view']['fig'].axes[0].get_xlim()
-        if np.all(np.round(slider.val, 5) == np.round(limits, 5)):
-            return
-
         slider.eventson = False
         slider.set_val(limits)
         slider.eventson = True
@@ -2104,6 +2154,18 @@ class NotNormalGUI(tk.Tk):
         elif toggle == 'show':
             self.windows['analyse'].grid(row=1, column=0, sticky="nsew", pady=WINDOW_PADDING, padx=(WINDOW_PADDING, 0))
             self.windows['left'].grid(row=0, column=0, sticky="nsew")
+
+    def toggle_iterate_options(self, toggle: list[str] = None):
+        if toggle is None and self.widgets['analyse']['iterate'].instate(['!disabled']):
+            toggle = ['disabled']
+        elif toggle is None:
+            toggle = ['!disabled']
+
+        for key in ['iterate', 'replace_gap_input', 'replace_gap_label', 'replace_factor_input', 'replace_factor_label',
+                    'event_direction_label', 'cutoff_input', 'cutoff_label']:
+            self.widgets['analyse'][key].state(toggle)
+        self.widgets['analyse']['event_direction_input'].state(['!readonly', toggle[0]] if toggle == ['disabled']
+                                                               else [toggle[0], 'readonly'])
 
     def toggle_analysis_view(self, toggle: str = None):
         if toggle is None and self.windows['analysis_view'].winfo_manager():
@@ -2278,6 +2340,7 @@ class NotNormalGUI(tk.Tk):
         tree.bind("<space>", partial(self.jump_to_event, title))
         tree.bind("<Button-3>", partial(self.outlier_event, title))
         tree.bind("<Delete>", partial(self.outlier_event, title))
+        tree.bind("<BackSpace>", partial(self.outlier_event, title))
 
         # Scrollbar
         scrollbar = ttk.Scrollbar(event_frame, orient="vertical", command=tree.yview,
@@ -2373,9 +2436,12 @@ class NotNormalGUI(tk.Tk):
         canvas = FigureCanvasTkAgg(fig, inner_frame)
         # Create toolbar
         toolbar = NavigationToolbar2Tk(canvas, graph_frame, pack_toolbar=False)
-        toolbar.children['!button4'].pack_forget()
-        for children in toolbar.winfo_children():
-            children.configure(background='white')
+        for child in toolbar.winfo_children():
+            child.pack_forget()
+            child.configure(background='white', border=1)
+        for child in toolbar.winfo_children():
+            if child != toolbar.children['!button4']:
+                child.pack(side=tk.LEFT)
         toolbar.update()
         toolbar.push_current()
         toolbar.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=PADDING)
@@ -2481,8 +2547,8 @@ class NotNormalGUI(tk.Tk):
         trace_min = np.min(self.trace[start:end])
         trace_max = np.max(self.trace[start:end])
         difference = 0.5 * abs(trace_max - trace_min)
-        ax.set(xlim=(start * self.time_step + self.time_vector[0], end * self.time_step + self.time_vector[0]),
-               ylim=(trace_min - difference, trace_max + difference))
+        self.update_figure_xlimits((start * self.time_step + self.time_vector[0], end * self.time_step + self.time_vector[0]))
+        ax.set(ylim=(trace_min - difference, trace_max + difference))
         self.widgets['analysis_view']['toolbar'].push_current()
         self.widgets['analysis_view']['fig'].canvas.draw_idle()
         self.widgets['analysis_view']['fig'].canvas.flush_events()
@@ -2552,9 +2618,97 @@ class NotNormalGUI(tk.Tk):
         for i in np.arange(0, 10, 2):
             self.after(i * 250, lambda: entry.configure(style=f'flash.{current}'))
             self.after((i + 1) * 250, lambda: entry.configure(style=current))
+        self.after(3000, lambda: entry.configure(style=current))
+
+    def downsample_line(self, x, y, xlim, max_points = None):
+        if max_points is None:
+            max_points = int(self.widgets['analysis_view']['canvas'].get_width_height()[0])
+        mask = (x >= xlim[0]) & (x <= xlim[1])
+        x_visible = x[mask]
+        y_visible = y[mask]
+        if len(x_visible) <= max_points:
+            return x_visible, y_visible
+
+        step = len(x_visible) // max_points
+        x_bins = x_visible[:step * max_points].reshape(-1, step)
+        y_bins = y_visible[:step * max_points].reshape(-1, step)
+
+        x_out = np.empty(2 * len(x_bins[:, 0]))
+        y_out = np.empty(2 * len(y_bins.min(axis=1)))
+        x_out[0::2] = x_bins[:, 0]
+        x_out[1::2] = x_bins[:, -1]
+        y_out[0::2] = y_bins.min(axis=1)
+        y_out[1::2] = y_bins.max(axis=1)
+
+        return x_out, y_out
+
+    def downsample_events(self, xlim):
+        # How many segments
+        N_events = len(self.event_coordinates)
+        if N_events == 0:
+            return np.array([], dtype=object), np.array([], dtype=object)
+
+        # Total width budget
+        W = int(self.widgets['analysis_view']['canvas'].get_width_height()[0])
+        # At least 2 pixels per segment
+        per_seg = max(2, W // N_events)
+
+        x_out, y_out = [], []
+        for start, end in self.event_coordinates:
+            # Grab and clamp each segment
+            seg_x = self.time_vector[start:end + 1]
+            seg_y = self.trace[start:end + 1]
+            mask = (seg_x >= xlim[0]) & (seg_x <= xlim[1])
+            if not mask.any():
+                continue
+            seg_x = seg_x[mask]
+            seg_y = seg_y[mask]
+
+            # Downsample this segment with its own budget
+            xs, ys = self.downsample_line(
+                seg_x, seg_y,
+                xlim=(seg_x[0], seg_x[-1]),
+                max_points=per_seg
+            )
+
+            x_out.extend(xs)
+            x_out.append(None)
+            y_out.extend(ys)
+            y_out.append(None)
+
+        return np.asarray(x_out, dtype=object), np.asarray(y_out, dtype=object)
+
+    def downsample_all(self):
+        ax = self.widgets['analysis_view']['fig'].axes[0]
+        xlim = ax.get_xlim()
+        thresh = 0
+        for line in ax.get_lines():
+            if line.get_label() not in self.colours.keys():
+                continue
+            if line.get_label() == 'threshold':
+                if thresh == 0:
+                    line.set_data(*self.downsample_line(self.time_vector, self.baseline + self.threshold, xlim))
+                else:
+                    line.set_data(*self.downsample_line(self.time_vector, self.baseline - self.threshold, xlim))
+                thresh += 1
+            elif line.get_label() == 'events':
+                line.set_data(*self.downsample_events(xlim))
+            else:
+                line.set_data(*self.downsample_line(self.time_vector, getattr(self, line.get_label()), xlim))
 
     def toolbar_key_press(self, figure_id, event):
         key_press_handler(event, self.widgets[figure_id]['canvas'], self.widgets[figure_id]['toolbar'])
+
+    def toolbar_wrapper(self, method):
+        def wrapper(*args, **kwargs):
+            method(*args, **kwargs)
+            ax = self.widgets['analysis_view']['fig'].axes[0]
+            # Downsample
+            self.downsample_all()
+            # Redraw
+            ax.figure.canvas.draw_idle()
+            ax.figure.canvas.flush_events()
+        return wrapper
 
     def process_results(self, results):
         if isinstance(results, list):
@@ -2609,7 +2763,8 @@ class NotNormalGUI(tk.Tk):
             return
 
         path = filedialog.askopenfilename(
-            initialdir="/" if self.path is None else os.path.split(self.path)[0],
+            initialdir="/" if self.trace_information['path'].get() == ''
+                           else os.path.split(self.trace_information['path'].get())[0],
             title="Choose a file",
             filetypes=(("All", "*.abf *.csv *.tsv *.txt *.dat"), ("ABF files", "*.abf"), ("CSV files", "*.csv"),
                        ("TSV files", "*.tsv"), ("Text files", "*.txt"), ("Data files", "*.dat"))
@@ -2649,12 +2804,11 @@ class NotNormalGUI(tk.Tk):
 
         self.reset_all()
         # Update the trace vectors
-        self.path = path
         self.trace = trace
         self.time_vector = time_vector
         self.time_step = time_step
         # Show the trace information and trace vector
-        self.update_load()
+        self.update_load(path)
         # Initialise the slider
         self.init_slider()
         # Update the figure
@@ -2663,7 +2817,8 @@ class NotNormalGUI(tk.Tk):
         self.analysis_options['z_score'].set(np.round(norm.ppf(1 - ((1 / len(self.trace)) / 2)), 3))
         self.default_analysis_options['z_score'] = self.analysis_options['z_score'].get()
         self.flash_entry(self.widgets['analyse']['z_score_input'])
-
+        # Disable iterate options
+        self.toggle_iterate_options(['disabled'])
         # Set the flag
         self.flags['loaded'] = True
 
@@ -2696,6 +2851,8 @@ class NotNormalGUI(tk.Tk):
         if title == 'Estimate':
             self.widgets['analyse']['iterate'].focus_set()
             self.flags['estimated'] = True
+            # Enable iterate options
+            self.toggle_iterate_options(['!disabled'])
         else:
             self.widgets['results']['save'].focus_set()
             self.flags['iterated'] = True
@@ -2811,9 +2968,9 @@ class NotNormalGUI(tk.Tk):
 
         # Save the results
         path = tk.filedialog.asksaveasfile(
-            initialfile=basename(self.path).split('.')[0] + f'_{label}.csv',
+            initialfile=basename(self.trace_information['path'].get()).split('.')[0] + f'_{label}.csv',
             defaultextension=".csv",
-            initialdir=os.path.split(self.path)[0],
+            initialdir=os.path.split(self.trace_information['path'].get())[0],
             title="Choose a location",
             filetypes=([("CSV files", "*.csv")])
         )
@@ -2821,12 +2978,31 @@ class NotNormalGUI(tk.Tk):
             return
 
         # If you don't do this, DictWriter will ruin your life :( (** 2 bcos of excel cell size limit)
+        units = self.trace_information['units'].get()
+        amp_key = 'Amplitude (A)' if units == 'A' else f'Amplitude ({units[0]}A)'
+        area_key = 'Area (C)' if units == 'A' else f'Area ({units[0]}C)'
         for event in results:
             packed = b"".join(struct.pack("d", num) for num in list(event.pop('Vector')))
             event['Vector (Base64)'] = base64.b64encode(packed).decode()
+            event['Duration (ms)'] = event.pop('Duration')
+            event['Max Cutoff (Hz)'] = event.pop('Max Cutoff')
+            event[area_key] = event.pop('Area')
+            event[amp_key] = event.pop('Amplitude')
+
+        fieldnames = [
+            'ID',
+            'Direction',
+            amp_key,
+            'Duration (ms)',
+            area_key,
+            'Max Cutoff (Hz)',
+            'Coordinates',
+            'Outlier',
+            'Vector (Base64)',
+        ]
 
         with open(path.name, 'w', encoding='utf8', newline='') as path:
-            w = csv.DictWriter(path, results.events[0].keys())
+            w = csv.DictWriter(path, fieldnames)
             w.writeheader()
             w.writerows(results.events)
 

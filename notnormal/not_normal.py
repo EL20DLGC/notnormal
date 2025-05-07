@@ -6,8 +6,7 @@ data. It includes a method of estimating the cutoff frequency and event directio
 thresholding method and a simple extraction method.
 """
 
-from typing import Optional
-from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil, empty
+from numpy import quantile, diff, sign, where, sort, concatenate, sqrt, round, ones, zeros, mean, ceil
 from numpy import percentile, ndarray, std, sum, max, median, asarray, array_split, double, int32, int64
 from scipy.signal import oaconvolve
 from scipy.ndimage import median_filter
@@ -16,17 +15,13 @@ from functools import partial
 from multiprocessing import Pool, cpu_count
 from notnormal.results import Iteration
 from warnings import catch_warnings, simplefilter, filterwarnings
+from gc import collect
+from psutil import virtual_memory, swap_memory
+from typing import Optional
 import cython
 
-if cython.compiled:
-    COMPILED = True
-    print('not_normal compiled')
-else:
-    COMPILED = False
-    print('not_normal not compiled')
-
+COMPILED = cython.compiled
 DTYPE = double
-
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -39,7 +34,7 @@ def not_normal(
     replace_factor: cython.int = 8,
     replace_gap: cython.int = 2,
     threshold_window: cython.double = 2.0,
-    z_score: cython.double = None,
+    z_score: Optional[double] = None,
     vector_results: cython.bint = False,
     parallel: cython.bint = False
 ) -> tuple:
@@ -56,7 +51,7 @@ def not_normal(
         replace_factor (int): Factor for replacing events in the calculation trace. Default is 8.
         replace_gap (int): Gap for replacing events in the calculation trace. Default is 2.
         threshold_window (float): Window size for threshold calculation. Default is 2.0.
-        z_score (float, optional): Z-score for event detection. If None, it is calculated based on the trace length.
+        z_score (float | None): Z-score for event detection. If None, it is calculated based on the trace length.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
         parallel (bool): Whether to run the iteration in parallel. Default is False.
 
@@ -103,7 +98,6 @@ def not_normal(
 
     return event_coordinates, baseline, dict(estimate=estimate_results, iteration=iteration_results)
 
-
 @cython.boundscheck(False)
 @cython.initializedcheck(False)
 def parallel_iterate(
@@ -133,7 +127,7 @@ def parallel_iterate(
         threshold_window (float): Window size for threshold calculation.
         z_score (float): Z-score for event detection.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
-        segment_size (int, optional): Size of segments for parallel processing. Default is None and will calculate automatically.
+        segment_size (int | None): Size of segments for parallel processing. Default is None and will calculate automatically.
 
     Returns:
         tuple: A tuple containing event coordinates, baseline, and iteration results.
@@ -157,50 +151,52 @@ def parallel_iterate(
     if splits < 5:
         return iterate(**args)
 
-    pool = Pool(processes=min(cpu_count(), splits))
-    results = pool.starmap(
-        partial(
-            iterate,
-            sample_rate=sample_rate,
-            cutoff=cutoff,
-            event_direction=event_direction,
-            replace_factor=replace_factor,
-            replace_gap=replace_gap,
-            threshold_window=threshold_window,
-            z_score=z_score,
-            vector_results=vector_results
-        ),
-        zip(array_split(trace, splits), array_split(filtered_trace, splits))
-    )
-    pool.close()
-    pool.join()
+    # Make an estimate of the memory required for the trace
+    trace_chunks = array_split(trace, splits)
+    filtered_trace_chunks = array_split(filtered_trace, splits)
+    final_mem = max((0, (virtual_memory().available + swap_memory().free) - (trace.nbytes * 6)))
+    max_workers = max((1, final_mem // (trace_chunks[0].nbytes * 9)))
+    processes = min(cpu_count(), splits, max_workers)
+    chunksize = max((1, len(trace_chunks) // (4 * processes)))
 
-    # Reduce the results
+    with Pool(processes=processes) as pool:
+        results = pool.starmap(
+            partial(
+                iterate,
+                sample_rate=sample_rate,
+                cutoff=cutoff,
+                event_direction=event_direction,
+                replace_factor=replace_factor,
+                replace_gap=replace_gap,
+                threshold_window=threshold_window,
+                z_score=z_score,
+                vector_results=vector_results
+            ),
+            zip(trace_chunks, filtered_trace_chunks),
+            chunksize=chunksize
+        )
+        del trace_chunks, filtered_trace_chunks
+        collect()
+
     iteration = Iteration(label=f'Final', args=args, trace=trace, filtered_trace=filtered_trace)
-    baselines = []
-    thresholds = []
-    initial_thresholds = []
-    calculation_traces = []
+    attr_names = ["baseline", "threshold", "initial_threshold", "calculation_trace"]
+    arrays = {name: [] for name in attr_names}
     event_coordinates = []
     current_len: cython.size_t = 0
     for result in results:
-        baselines.append(result[-1][-1].baseline)
-        thresholds.append(result[-1][-1].threshold)
-        initial_thresholds.append(result[-1][0].initial_threshold)
-        calculation_traces.append(result[-1][-1].calculation_trace)
-        if result[-1][-1].event_coordinates.size != 0:
-            result[-1][-1].event_coordinates[:, 0] += current_len
-            result[-1][-1].event_coordinates[:, 1] += current_len
-            event_coordinates.append(result[-1][-1].event_coordinates)
-        current_len += len(result[-1][-1].baseline)
-
-    iteration.baseline = concatenate(baselines)
-    iteration.threshold = concatenate(thresholds)
-    iteration.initial_threshold = concatenate(initial_thresholds)
-    iteration.calculation_trace = concatenate(calculation_traces)
-    iteration.event_coordinates = concatenate(event_coordinates)
-    coordinates_view: cython.longlong[:, ::1] = iteration.event_coordinates
+        last_item = result[-1][-1]
+        for name in attr_names:
+            arrays[name].append(getattr(last_item, name))
+        if last_item.event_coordinates.size:
+            last_item.event_coordinates[:, 0] += current_len
+            last_item.event_coordinates[:, 1] += current_len
+            event_coordinates.append(last_item.event_coordinates)
+        current_len += len(last_item.baseline)
+    for name, array in arrays.items():
+        setattr(iteration, name, concatenate(array))
+    setattr(iteration, "event_coordinates", concatenate(event_coordinates) if event_coordinates else [])
     # recompute event stats, trace stats and over extractions
+    coordinates_view: cython.longlong[:, ::1] = iteration.event_coordinates
     iteration.trace_stats = trace_statistics(iteration.calculation_trace, iteration.baseline, coordinates_view)
     iteration.event_stats = event_statistics(coordinates_view)
     iteration.event_stats['Over Extractions'], iteration.event_stats['Significant Events'] = expected_outliers(
@@ -212,7 +208,6 @@ def parallel_iterate(
     )
 
     return iteration.event_coordinates, iteration.baseline, iteration
-
 
 @cython.boundscheck(False)
 @cython.initializedcheck(False)
@@ -327,8 +322,7 @@ def iterate(
         z_score
     )
     results.append(current)
-    return current.event_coordinates, baseline, results
-
+    return current.event_coordinates, current.baseline, results
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -414,7 +408,6 @@ def initial_estimate(
 
     return results.event_stats['Max Cutoff'], results.event_direction, results
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -464,7 +457,6 @@ def expected_outliers(
     false_positives: cython.double = (2 * (1 - norm.cdf(z_score))) * (len(trace) - total_length)
     return false_positives, significant_events
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -510,7 +502,6 @@ def simple_extractor(
 
     return events
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -537,7 +528,6 @@ def event_statistics(event_coordinates: cython.longlong[:, ::1]) -> dict:
 
     return results
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -552,7 +542,7 @@ def trace_statistics(
     Args:
         trace (ndarray): The input signal trace.
         baseline (ndarray): The baseline of the trace.
-        event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
+        event_coordinates (ndarray | None): The coordinates of detected events. Default is None.
 
     Returns:
         dict: A dictionary containing trace statistics.
@@ -589,7 +579,6 @@ def trace_statistics(
 
     return results
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -617,7 +606,6 @@ def sort_coordinates(trace: ndarray, baseline: ndarray, event_coordinates: cytho
     x: cython.longlong[::1]
     return asarray(sorted(event_coordinates, key=lambda x: (x[1] - x[0]) * max(abs(adjusted[x[0]:x[1]])),
                           reverse=True), dtype=int64)
-
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -670,7 +658,6 @@ def calculate_cutoffs(
 
     return max_cutoffs
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -687,7 +674,6 @@ def bounds_filter(trace: ndarray, window: cython.int) -> ndarray:
     """
 
     return median_filter(trace, window) if window else trace
-
 
 @cython.boundscheck(False)
 @cython.initializedcheck(False)
@@ -773,7 +759,6 @@ def event_replacer(
 
     return asarray(padded_trace[longest:-longest], dtype=DTYPE)
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -811,7 +796,6 @@ def locate_events(
     event_coordinates = event_bounds(threshold_idxs, baseline_idxs)
 
     return event_coordinates
-
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -863,7 +847,6 @@ def event_bounds(threshold_idxs: cython.longlong[::1], baseline_idxs: cython.lon
 
     return asarray(event_coordinates[:j], dtype=int64)
 
-
 @cython.boundscheck(False)
 @cython.initializedcheck(False)
 def baseline_filter(trace: cython.double[::1], cutoff: cython.double, sample_rate: cython.int) -> ndarray:
@@ -902,7 +885,6 @@ def baseline_filter(trace: cython.double[::1], cutoff: cython.double, sample_rat
 
     return baseline
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -930,7 +912,6 @@ def baseline_crosses(trace: ndarray, baseline: ndarray) -> ndarray:
 
     return zero_trace
 
-
 @cython.boundscheck(False)
 @cython.wraparound(False)
 @cython.initializedcheck(False)
@@ -950,8 +931,8 @@ def thresholder(
         trace (ndarray): The input signal trace.
         baseline (ndarray): The baseline of the trace.
         z_score (float): The Z-score for event detection.
-        window (int, optional): The window size in samples for threshold calculation. Default is None.
-        event_coordinates (ndarray, optional): The coordinates of detected events. Default is None.
+        window (int | None): The window size in samples for threshold calculation. Default is None.
+        event_coordinates (ndarray | None): The coordinates of detected events. Default is None.
         method (str): The method for threshold calculation ('iqr' or 'std'). Default is 'iqr'.
 
     Returns:
@@ -1008,7 +989,6 @@ def thresholder(
             standard_deviation_view[start:end] = std(current_segment)
 
     return standard_deviation * z_score
-
 
 @cython.boundscheck(False)
 @cython.wraparound(False)

@@ -2,7 +2,6 @@ import os.path
 from setuptools import find_packages, setup, Extension
 from Cython.Build import cythonize
 
-
 this_directory = os.path.abspath(os.path.dirname(__file__))
 with open(os.path.join(this_directory, "README.md"), encoding="utf-8") as f:
     long_description = f.read()
@@ -17,13 +16,14 @@ setup(
     long_description=long_description,
     packages=find_packages() + ["notnormal.data"],
     install_requires=[
+        "Cython>=3.0",
         "numpy",
         "scipy",
         "stochastic",
         "ttkbootstrap",
         "matplotlib",
         "pyabf",
-        "Cython"
+        "psutil"
     ],
     classifiers=[
         "Development Status :: 3 - Alpha",
