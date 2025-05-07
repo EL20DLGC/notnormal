@@ -1452,7 +1452,7 @@ class NotNormalGUI(tk.Tk):
         self.widgets['analysis_view']['fig'] = Figure(layout='constrained')
         ax = self.widgets['analysis_view']['fig'].add_subplot(111)
         ax.set_xlabel("Time ($s$)", fontsize=MEDIUM_FONT)
-        ax.set_ylabel("Current" + f' (${self.trace_information['units'].get()}$)', fontsize=MEDIUM_FONT)
+        ax.set_ylabel("Current" + f" (${self.trace_information['units'].get()}$)", fontsize=MEDIUM_FONT)
         # Create canvas
         self.widgets['analysis_view']['canvas'] = CustomFigureCanvas(self.widgets['analysis_view']['fig'],
                                                                     self.windows['analysis_view_figure'], self)
@@ -1932,7 +1932,7 @@ class NotNormalGUI(tk.Tk):
 
         # Set labels and grid
         ax.set_xlabel("Time (s)", fontsize=MEDIUM_FONT)
-        ax.set_ylabel("Current" + f' (${self.trace_information['units'].get()}$)', fontsize=MEDIUM_FONT)
+        ax.set_ylabel("Current" + f" (${self.trace_information['units'].get()}$)", fontsize=MEDIUM_FONT)
         ax.grid(self.figure_options['grid'].get())
         self.widgets['analysis_view']['canvas'].draw_idle()
         self.widgets['analysis_view']['canvas'].flush_events()
@@ -2629,29 +2629,33 @@ class NotNormalGUI(tk.Tk):
         if len(x_visible) <= max_points:
             return x_visible, y_visible
 
-        step = len(x_visible) // max_points
-        x_bins = x_visible[:step * max_points].reshape(-1, step)
-        y_bins = y_visible[:step * max_points].reshape(-1, step)
+        idx_bins = np.array_split(np.arange(len(x_visible)), max_points)
+        x_bins = [x_visible[idx] for idx in idx_bins]
+        y_bins = [y_visible[idx] for idx in idx_bins]
 
-        x_out = np.empty(2 * len(x_bins[:, 0]))
-        y_out = np.empty(2 * len(y_bins.min(axis=1)))
-        x_out[0::2] = x_bins[:, 0]
-        x_out[1::2] = x_bins[:, -1]
-        y_out[0::2] = y_bins.min(axis=1)
-        y_out[1::2] = y_bins.max(axis=1)
+        x_out = np.empty(2 * len(x_bins))
+        y_out = np.empty(2 * len(y_bins))
+        for i, (xb, yb) in enumerate(zip(x_bins, y_bins)):
+            x_out[2 * i] = xb[0]
+            x_out[2 * i + 1] = xb[-1]
+            y_out[2 * i] = yb.min()
+            y_out[2 * i + 1] = yb.max()
 
         return x_out, y_out
 
     def downsample_events(self, xlim):
-        # How many segments
-        N_events = len(self.event_coordinates)
-        if N_events == 0:
+        # Total width budget
+        width = int(self.widgets['analysis_view']['canvas'].get_width_height()[0])
+        # Select only events that overlap xlim
+        visible = []
+        for start, end in self.event_coordinates:
+            if self.time_vector[end] >= xlim[0] and self.time_vector[start] <= xlim[1]:
+                visible.append((start, end))
+        if len(visible) == 0:
             return np.array([], dtype=object), np.array([], dtype=object)
 
-        # Total width budget
-        W = int(self.widgets['analysis_view']['canvas'].get_width_height()[0])
         # At least 2 pixels per segment
-        per_seg = max(2, W // N_events)
+        per_seg = max(2, width // len(visible))
 
         x_out, y_out = [], []
         for start, end in self.event_coordinates:
