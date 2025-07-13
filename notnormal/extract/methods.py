@@ -4,7 +4,7 @@ data.
 """
 
 from numpy import quantile, sign, sort, concatenate, sqrt, round, ones, zeros, mean, ceil, cumsum, abs, compress, \
-    percentile, ndarray, std, sum, max, median, asarray, array_split, double, int64, int8, flatnonzero, empty, \
+    percentile, ndarray, std, sum, max, median, asarray, array_split, double, int64, uint8, flatnonzero, empty, \
     bitwise_xor, greater_equal, less_equal, searchsorted, column_stack, full, minimum, maximum, roll, pad, argsort
 from scipy.signal import oaconvolve
 from scipy.integrate import simpson
@@ -65,10 +65,6 @@ def not_normal(
     Returns:
         tuple[IterateResults, InitialEstimateResults]: The iteration results object and initial estimate results object.
     """
-
-    # Default to 1 expected outlier per trace (computed on length, of course)
-    if z_score is None:
-        z_score = float(norm.ppf(1 - ((1 / len(trace)) / 2)))
 
     # Default 3-point median filter for bounding
     filtered_trace = _bounds_filter(trace, bounds_window)
@@ -131,16 +127,6 @@ def parallel_iterate(
         IterateResults: An object containing the iterate results.
     """
 
-    # Default to the same size as the confirmed stopping criterion accuracy or threshold accuracy, whichever is larger
-    minimum_segment = max([1000000, (sample_rate * 2.0), (sample_rate * threshold_window)])
-    segment_size = min([len(trace), max([segment_size or 0, minimum_segment])])
-    splits = len(trace) // segment_size
-
-    # Not worth it to parallelize if the trace is too small
-    if splits < 5:
-        return iterate(trace, cutoff, event_direction, filtered_trace, sample_rate, replace_factor, replace_gap,
-                       threshold_window, z_score, output_features, vector_results, _validate=True)
-
     # Validate all the inputs
     trace, sample_rate, label, filtered_trace, z_score, _, _ = _validate_input(trace, cutoff, filtered_trace, sample_rate,
                                 replace_factor, replace_gap, threshold_window, z_score, output_features, event_direction)
@@ -148,6 +134,17 @@ def parallel_iterate(
     # Init results and get args
     results = IterateResults(IterateArgs(**{k: v for k, v in locals().items() if k in IterateArgs.__annotations__},
                                          **{'_validate': True}))
+
+    # Default to the same size as the confirmed stopping criterion accuracy or threshold accuracy, whichever is larger
+    minimum_segment = max([1000000.0, (sample_rate * 2.0), (sample_rate * threshold_window)])
+    segment_size = int(min([len(trace), max([segment_size or 0, minimum_segment])]))
+    splits = len(trace) // segment_size
+
+    # Not worth it to parallelize if the trace is too small
+    if splits < 5:
+        result = iterate(trace, cutoff, event_direction, filtered_trace, sample_rate, replace_factor, replace_gap,
+                       threshold_window, z_score, output_features, vector_results, _validate=True)
+        return result
 
     # Get the chunks for parallel processing
     chunk_pairs = list(zip(array_split(trace, splits), array_split(filtered_trace, splits)))
@@ -187,7 +184,7 @@ def parallel_iterate(
     # Offset and concatenate event coordinates
     coords_list = [item.event_coordinates + offset for item, offset in zip(last_items, offsets)
                     if item.event_coordinates is not None and item.event_coordinates.size]
-    iteration.event_coordinates = concatenate(coords_list) if coords_list else None
+    iteration.event_coordinates = concatenate(coords_list) if coords_list else zeros((0, 2), dtype=int64)
 
     # Get event stats
     event_stats = _event_statistics(iteration.event_coordinates)
@@ -276,7 +273,10 @@ def iterate(
        sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features, event_direction, _validate)
 
     # Init results and get args
-    results = IterateResults(IterateArgs(**{k: v for k, v in locals().items() if k in IterateArgs.__annotations__}))
+    args = {'cutoff': cutoff, 'event_direction': event_direction, 'sample_rate': sample_rate, 'replace_factor': replace_factor,
+            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
+            'output_features': output_features, 'vector_results': vector_results, '_validate': _validate}
+    results = IterateResults(IterateArgs(**args))
 
     # Easter egg
     calc_trace = trace
@@ -320,8 +320,8 @@ def iterate(
     trace_stats = current.trace_stats
     coordinate_view: cython.longlong[:, ::1] = current.event_coordinates
     baseline = _event_replacer(baseline, calc_trace, coordinate_view, replace_factor=0, replace_gap=0)
-    threshold = _thresholder((calc_trace - baseline), z_score, int(threshold_window * sample_rate), method='std',
-                              event_mask=__event_mask(current.event_coordinates, len(trace)))
+    threshold = _thresholder((asarray(calc_trace) - asarray(baseline)), z_score, int(threshold_window * sample_rate),
+                              method='std', event_mask=__event_mask(current.event_coordinates, len(trace)))
     coordinates, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
                                           'biphasic', replace=False, **lr_args)
 
@@ -340,7 +340,7 @@ def iterate(
                                                                                                coordinates, z_score)
 
     # Store the final vectors
-    results.iterations.append(Iteration(calculation_trace=calc_trace, baseline=baseline, threshold=threshold,
+    results.iterations.append(Iteration(calculation_trace=asarray(calc_trace), baseline=asarray(baseline), threshold=threshold,
                                         trace_stats=trace_stats, event_coordinates=coordinates, event_stats=event_stats))
 
     return results
@@ -397,8 +397,10 @@ def initial_estimate(
         filtered_trace, sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features, _validate=_validate)
 
     # Get args
-    results = InitialEstimateResults(InitialEstimateArgs(**{k: v for k, v in locals().items() if k in
-                                                            InitialEstimateArgs.__annotations__}))
+    args = {'sample_rate': sample_rate, 'estimate_cutoff': estimate_cutoff, 'replace_factor': replace_factor,
+            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
+            'output_features': output_features, 'vector_results': vector_results, '_validate': _validate}
+    results = InitialEstimateResults(InitialEstimateArgs(**args))
 
     # Easter egg
     calc_trace = trace
@@ -418,7 +420,7 @@ def initial_estimate(
         # Store results if vector_results or the final iteration
         current = Iteration()
         if vector_results or i == 2:
-            current.calculation_trace, current.baseline, current.threshold = calc_trace, baseline, threshold
+            current.calculation_trace, current.baseline, current.threshold = asarray(calc_trace), baseline, threshold
 
         if i == 0:
             # (1) Remove events from the side of most influence (save this initial threshold and direction)
@@ -540,17 +542,21 @@ def simple_extractor(
 Internal API
 """
 
-def _bounds_filter(trace: ndarray, window: cython.int) -> ndarray:
+def _bounds_filter(trace: ndarray | Trace, window: cython.int) -> ndarray:
     """
     Apply a median filter to the trace to be used for bounding. This will be deprecated in the future.
 
     Args:
-        trace (ndarray): The input signal trace.
+        trace (ndarray | Trace): The input trace or a Trace object.
         window (int): The window size for the median filter.
 
     Returns:
         ndarray: The filtered trace.
     """
+
+    # Trace or ndarray input
+    if isinstance(trace, Trace):
+        trace = trace.trace
 
     return median_filter(trace, window) if window else trace
 
@@ -573,13 +579,12 @@ def _validate_input(
     and iterate.
     """
 
-    # Arguments for _baseline_threshold and _locate_replace
-    bl_args = {'cutoff': cutoff, 'sample_rate': sample_rate, 'z_score': z_score,
-               'threshold_window': int(threshold_window * sample_rate)}
-    lr_args = {'replace_factor': replace_factor, 'replace_gap': replace_gap}
-
     #  Do not validate
     if not _validate:
+        # Arguments for _baseline_threshold and _locate_replace
+        bl_args = {'cutoff': cutoff, 'sample_rate': sample_rate, 'z_score': z_score,
+                   'threshold_window': int(threshold_window * sample_rate)}
+        lr_args = {'replace_factor': replace_factor, 'replace_gap': replace_gap}
         return trace, sample_rate, '', filtered_trace, z_score, bl_args, lr_args
 
     # Trace or ndarray input
@@ -596,7 +601,7 @@ def _validate_input(
 
     # Default to 1 expected outlier per trace (computed on length, of course)
     if z_score is None:
-        z_score = float(norm.ppf(1 - ((1 / len(trace)) / 2)))
+        z_score = float(norm.ppf(1.0 - ((1.0 / len(trace)) / 2.0)))
 
     # Check input parameters
     if trace.shape != filtered_trace.shape:
@@ -615,6 +620,11 @@ def _validate_input(
         raise ValueError("Event direction must be 'up', 'down', or 'biphasic'.")
     if output_features is not None and output_features not in ('full', 'FWHM', 'FWQM'):
         raise ValueError("Output features must be 'full', 'FWHM', or 'FWQM'.")
+
+    # Arguments for _baseline_threshold and _locate_replace
+    bl_args = {'cutoff': cutoff, 'sample_rate': sample_rate, 'z_score': z_score,
+               'threshold_window': int(threshold_window * sample_rate)}
+    lr_args = {'replace_factor': replace_factor, 'replace_gap': replace_gap}
 
     return trace, sample_rate, label, filtered_trace, z_score, bl_args, lr_args
 
@@ -650,7 +660,7 @@ def _expected_outliers(
     event_coordinates: cython.longlong[:, ::1] = event_coordinates
 
     # Single outlier z_score expectation
-    max_z: cython.double = norm.ppf(1 - ((1 / len(trace)) / 2))
+    max_z: cython.double = norm.ppf(1.0 - ((1.0 / len(trace)) / 2.0))
     max_threshold: cython.double[::1] = (threshold / z_score) * max_z
     adjusted: cython.double[::1] = abs(trace - baseline)
 
@@ -708,7 +718,7 @@ def _calculate_cutoffs(
     event_coordinates: cython.longlong[:, ::1] = event_coordinates
 
     # Calculate the cutoff frequency for each event
-    time_step: cython.double = 1 / sample_rate
+    time_step: cython.double = 1.0 / sample_rate
     event_id: cython.Py_ssize_t = 0
     event_start: cython.Py_ssize_t
     event_end: cython.Py_ssize_t
@@ -821,7 +831,7 @@ def _locate_events(
 
     # Mask used everywhere
     n: cython.Py_ssize_t = adjusted.shape[0]
-    mask = empty(n, dtype=bool)
+    mask = empty(n, dtype=uint8)
 
     # Filtered trace for baseline crossing indices
     baseline_idxs: cython.longlong[::1] = __find_crosses(greater_equal(adjusted_filtered, 0, out=mask), False)
@@ -972,7 +982,7 @@ def _event_replacer(
     longest_window: cython.Py_ssize_t = int(ceil(longest_event * (replace_factor + replace_gap)))
 
     # If the longest window is larger than the trace, we pad it extra after symmetric
-    dtype = trace.dtype
+    dtype = asarray(trace).dtype
     if longest_window <= trace.shape[0] - 1:
         padded_trace = pad(trace, longest_window, mode="symmetric").astype(dtype, copy=False)
     else:
@@ -1064,9 +1074,9 @@ def _baseline_threshold(
 
     # Get event mask (view)
     if event_coordinates is None:
-        event_mask: cython.bint[::1] = zeros(trace.shape[0], dtype=bool)
+        event_mask: cython.uchar[::1] = zeros(trace.shape[0], dtype=uint8)
     else:
-        event_mask: cython.bint[::1] = __event_mask(event_coordinates, trace.shape[0])
+        event_mask: cython.uchar[::1] = __event_mask(event_coordinates, trace.shape[0])
 
     # Baseline-adjust the traces now to save repeats
     adjusted = trace - baseline
@@ -1098,7 +1108,7 @@ def _baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.
     """
 
     # Cutoff to boxcar length conversion (odd length)
-    length: cython.Py_ssize_t = int(round(sqrt(0.196202 + ((cutoff * (1 / sample_rate)) ** 2)) / (cutoff * (1 / sample_rate))))
+    length: cython.Py_ssize_t = int(round(sqrt(0.196202 + ((cutoff * (1.0 / sample_rate)) ** 2)) / (cutoff * (1.0 / sample_rate))))
 
     # Make it odd, set as 3 if it is 1, and ensure it is not longer than the trace
     if length & 1 == 0:
@@ -1128,7 +1138,7 @@ def _thresholder(
         adjusted: ndarray,
         z_score: cython.double,
         window: cython.longlong,
-        event_mask: cython.bint[::1],
+        event_mask: cython.uchar[::1],
         method: str = 'iqr'
 ) -> ndarray:
     """
@@ -1168,7 +1178,7 @@ def _thresholder(
 
         # Mask events if event_mask is provided
         data_segment = adj[start:end]
-        mask = asarray(event_mask[start:end])
+        mask = asarray(event_mask[start:end], dtype=bool)
         current_segment = compress(~mask, data_segment)
 
         if current_segment.shape[0] < 2:
@@ -1187,7 +1197,7 @@ def _thresholder(
 
 def _trace_statistics(
     adjusted: ndarray,
-    event_mask: cython.bint[::1],
+    event_mask: cython.uchar[::1],
 ) -> dict[str, cython.double]:
     """
     Calculate statistics for the trace.
@@ -1201,7 +1211,7 @@ def _trace_statistics(
     """
 
     # Get the masked adjusted
-    mask = asarray(event_mask)
+    mask = asarray(event_mask, dtype=bool)
     adjusted: cython.double[::1] = adjusted[~mask]
 
     results = {}
@@ -1224,7 +1234,7 @@ def _trace_statistics(
 Super Internal API
 """
 
-def __find_crosses(sign_mask: cython.bint[::1], pair_match: cython.bint = True) -> cython.longlong[::1]:
+def __find_crosses(sign_mask: cython.uchar[::1], pair_match: cython.bint = True) -> cython.longlong[::1]:
     """
     Internal function for finding crossing indices, using XOR of successive elements marking a flip.
 
@@ -1240,7 +1250,7 @@ def __find_crosses(sign_mask: cython.bint[::1], pair_match: cython.bint = True) 
     n: cython.Py_ssize_t = sign_mask.shape[0]
     if n < 2:
         return empty(0, dtype=int64)
-    zero_trace = empty(n - 1, dtype=bool)
+    zero_trace = empty(n - 1, dtype=uint8)
     bitwise_xor(sign_mask[:n - 1], sign_mask[1:], out=zero_trace)
     flips: cython.longlong[::1] = flatnonzero(zero_trace).astype(int64, copy=False)
     f_size: cython.Py_ssize_t = flips.shape[0]
@@ -1290,10 +1300,10 @@ def __event_bounds(
     n: cython.Py_ssize_t = threshold_idxs.shape[0] // 2
     starts = asarray(threshold_idxs[::2])
     ends = asarray(threshold_idxs[1::2])
-    baseline_idxs = asarray(baseline_idxs)
+    baseline_id = asarray(baseline_idxs)
 
     # Degenerate case
-    if baseline_idxs.shape[0] == 0:
+    if baseline_id.shape[0] == 0:
         left = zeros(n, dtype=int64)
         right = full(n, length - 1, dtype=int64)
     else:
@@ -1301,14 +1311,14 @@ def __event_bounds(
         left_idx = searchsorted(baseline_idxs, starts, side='right') - 1
         fell_off = (left_idx == -1)
         left_idx[fell_off] = 0
-        left = baseline_idxs[left_idx]
+        left = baseline_id[left_idx]
         left[fell_off] = 0
 
         # Nearest baseline cross right of each end
-        right_idx = searchsorted(baseline_idxs, ends, side='left')
-        fell_off[:] = (right_idx == baseline_idxs.shape[0])
-        right_idx[fell_off] = baseline_idxs.shape[0] - 1
-        right = baseline_idxs[right_idx] + 1
+        right_idx = searchsorted(baseline_id, ends, side='left')
+        fell_off[:] = (right_idx == baseline_id.shape[0])
+        right_idx[fell_off] = baseline_id.shape[0] - 1
+        right = baseline_id[right_idx] + 1
         minimum(right, length - 1, out=right)
         right[fell_off] = length - 1
 
@@ -1319,7 +1329,7 @@ def __event_bounds(
     return column_stack((left[keep], right[keep]))
 
 
-def __event_mask(event_coordinates: ndarray, length: cython.Py_ssize_t) -> cython.bint[::1]:
+def __event_mask(event_coordinates: ndarray, length: cython.Py_ssize_t) -> cython.uchar[::1]:
     """
     Function to create a boolean event mask from event coordinates and return a view
 
@@ -1335,13 +1345,13 @@ def __event_mask(event_coordinates: ndarray, length: cython.Py_ssize_t) -> cytho
     coordinate_view: cython.longlong[:, ::1] = event_coordinates
 
     # Allocate output
-    event_mask: cython.bint[::1] = zeros(length, dtype=bool)
+    event_mask: cython.uchar[::1] = zeros(length, dtype=uint8)
     event_number: cython.Py_ssize_t = coordinate_view.shape[0]
     if event_number == 0:
         return event_mask
 
     # Differential array, (1, -1) for bounds of event
-    delta: cython.char[::1] = zeros(length + 1, dtype=int8)
+    delta: cython.uchar[::1] = zeros(length + 1, dtype=uint8)
     event_id: cython.Py_ssize_t = 0
     start_start: cython.Py_ssize_t
     event_end: cython.Py_ssize_t

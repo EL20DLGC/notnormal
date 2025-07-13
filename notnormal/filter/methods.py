@@ -145,7 +145,7 @@ def partial_moswt(
         trace = trace.trace
 
     # Get the padding level (max decomposition level including further tree-like decompositions)
-    pad_level = maximum(max_level + u_length, max_level + p_length - 1)
+    pad_level = int(maximum(max_level + u_length, max_level + p_length - 1))
 
     # Pad the trace to allow decomposition
     padded_trace = _moswt_pad(trace, pad_level)
@@ -182,7 +182,7 @@ def inverse_partial_moswt(
     inversed = _inverse_partial_moswt(coeffs, wavelet, max_level, u_length, p_length)
 
     # Get the padding level (max decomposition level including further tree-like decompositions)
-    pad_level = maximum(max_level + u_length, max_level + p_length - 1)
+    pad_level = int(maximum(max_level + u_length, max_level + p_length - 1))
 
     # Unpad the inversed trace
     inversed = _moswt_unpad(inversed, pad_level)
@@ -442,9 +442,9 @@ def _iswt_start_level(
     wavelet = deepcopy(wavelet)
 
     # Do the filter normalisation
-    wavelet = _as_wavelet(wavelet)
+    wave = _as_wavelet(wavelet)
     if norm:
-        wavelet = _rescale_wavelet_filterbank(wavelet, sqrt(2.0))
+        wave = _rescale_wavelet_filterbank(wave, sqrt(2.0))
 
     # Get correct mode
     mode = Modes.from_object('periodization')
@@ -458,8 +458,8 @@ def _iswt_start_level(
             idx = arange(first, output.shape[output.ndim - 1], step_size)
             even = idx[0::2]
             odd = idx[1::2]
-            x_even = idwt_single(output[..., even], cd[..., even], wavelet, mode)
-            x_odd = idwt_single(output[..., odd], cd[..., odd], wavelet, mode)
+            x_even = idwt_single(output[..., even], cd[..., even], wave, mode)
+            x_odd = idwt_single(output[..., odd], cd[..., odd], wave, mode)
             x_odd = roll(x_odd, 1, axis=-1)
             output[..., idx] = (x_even + x_odd) / 2.0
 
@@ -539,7 +539,7 @@ def _get_snr_thresholds(
         # Compute threshold Tn = nv_n / sqrt(max(sv_n, 1e-15)) (BayesShrink)
         bayes = nv / sqrt(maximum(sv, 1e-15))
         # Cap with the expected number of two-sided outliers above +-T is 1
-        outlier_cap = sqrt(nv) * norm.ppf(1 - ((1 / length) / 2))
+        outlier_cap = sqrt(nv) * norm.ppf(1.0 - ((1.0 / length) / 2.0))
         # Append the minimum of the two thresholds
         thresholds.append(min(bayes, outlier_cap))
 

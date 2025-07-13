@@ -64,7 +64,7 @@ def load_trace(path: str, label: Optional[str] = None) -> Trace:
     trace = Trace(
         label=label if label else path_obj.stem,
         trace=asarray(trace, dtype=float),
-        sample_rate=int(round(1 / (time_vector[1] - time_vector[0]))),
+        sample_rate=int(round(1.0 / (time_vector[1] - time_vector[0]))),
         units=units
     )
 

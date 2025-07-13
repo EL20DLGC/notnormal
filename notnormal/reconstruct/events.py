@@ -11,7 +11,7 @@ from umap import UMAP
 from numpy.linalg import norm
 from numpy.random import default_rng
 from numpy import mean, zeros, sum, linspace, ndarray, max, average, maximum, corrcoef, pad, array, cross, vstack, std, \
-    argmax, correlate, log, exp, ceil, asarray, clip
+    argmax, correlate, log, exp, ceil, asarray, clip, int32
 from scipy.interpolate import CubicSpline
 from scipy.integrate import simpson
 from scipy.stats import wasserstein_distance
@@ -335,8 +335,8 @@ def _cluster_latent(
         dict[int, ShapeClusters]: A dictionary of clustering results keyed by the number of clusters.
     """
 
-    if len(transform) == 0 or len(vectors) == 0:
-        raise ValueError("No vectors to cluster.")
+    if len(transform) < 2 or len(vectors) < 2:
+        raise ValueError("At least two vectors are required for clustering.")
     if len(transform) != len(vectors):
         raise ValueError("Transformed vectors and original vectors must have the same length.")
 
@@ -404,7 +404,7 @@ def _representative_vectors(
     """
 
     # Configure progress bar
-    total = sum(len(clusters.clusters) for clusters in clusters_dict.values())
+    total = sum([len(clusters.clusters) for clusters in clusters_dict.values()])
     with tqdm(total=total, desc='Computing Representative Vectors', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
         # For each of the clustering results
         for clusters in clusters_dict.values():
@@ -898,7 +898,7 @@ def _sample_log_method(
     return local_model.sample(1)[0][0]
 
 
-def _augment_representative(duration: int, area: float, representative: ndarray) -> ndarray:
+def _augment_representative(duration: int32, area: float, representative: ndarray) -> ndarray:
     """
     Scale the representative vector to the duration and area.
 

@@ -49,6 +49,17 @@ _MEDIUM_FONT = 14
 _SMALL_FONT = 10
 
 
+@lru_cache(maxsize=200)
+def _get_edges(length, max_points):
+    # Equally spaced bin edges
+    k = np.arange(max_points, dtype=np.int64)
+    starts = (k * np.int64(length)) // np.int64(max_points)
+    ends = np.empty_like(starts)
+    ends[:len(ends) - 1] = starts[1:]
+    ends[len(ends) - 1] = length
+    return starts, ends
+
+
 class CustomFigureCanvas(FigureCanvasTkAgg):
     def __init__(self, figure, window, root):
         super().__init__(figure, window)
@@ -2650,17 +2661,6 @@ class NotNormalGUI(tk.Tk):
             self.after((i + 1) * 250, lambda: entry.configure(style=current))
         self.after(3000, lambda: entry.configure(style=current))
 
-    @staticmethod
-    @lru_cache(maxsize=200)
-    def _get_edges(length, max_points):
-        # Equally spaced bin edges
-        k = np.arange(max_points, dtype=np.int64)
-        starts = (k * np.int64(length)) // np.int64(max_points)
-        ends = np.empty_like(starts)
-        ends[:len(ends) - 1] = starts[1:]
-        ends[len(ends) - 1] = length
-        return starts, ends
-
     def downsample_line(self, x, y, xlim, max_points=None):
         if max_points is None:
             max_points = int(self.widgets['analysis_view']['canvas'].get_tk_widget().winfo_width())
@@ -2677,7 +2677,7 @@ class NotNormalGUI(tk.Tk):
             return x_visible, y_visible
 
         # Equally spaced bin edges
-        starts, ends = self._get_edges(length, max_points)
+        starts, ends = _get_edges(length, max_points)
 
         # Per bin min and max
         y_min = np.minimum.reduceat(y_visible, starts)
@@ -2873,7 +2873,7 @@ class NotNormalGUI(tk.Tk):
         # Update the figure
         self.update_figure(title='Trace', retain_view=False)
         # Set the z-score
-        self.analysis_options['z_score'].set(np.round(norm.ppf(1 - ((1 / len(self.trace)) / 2)), 3))
+        self.analysis_options['z_score'].set(np.round(norm.ppf(1.0 - ((1.0 / len(self.trace)) / 2.0)), 3))
         self.default_analysis_options['z_score'] = self.analysis_options['z_score'].get()
         self.flash_entry(self.widgets['analyse']['z_score_input'])
         # Disable iterate options

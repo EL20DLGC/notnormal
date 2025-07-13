@@ -352,6 +352,7 @@ class InitialEstimateArgs:
     z_score: float
     output_features: str
     vector_results: bool
+    _validate: bool
 
 
     def to_dict(self) -> dict[str, Any]:

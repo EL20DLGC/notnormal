@@ -93,7 +93,7 @@ def reconstruct_noise(
     removed_trace = trace[~event_mask]
 
     # Get the PSD, only need at most twice the aa cutoff for accurate fitting
-    f, pxx = get_psd(removed_trace, sample_rate, fmax=aa_cutoff * 2, psd_period=psd_period, nfft=nfft)
+    f, pxx = get_psd(removed_trace, sample_rate, fmax=aa_cutoff * 2.0, psd_period=psd_period, nfft=nfft)
 
     # Fit the noise regimes
     fits = fit_noise(
@@ -191,11 +191,11 @@ def fit_noise(
             p_filter = abs(h_filter) ** 2
 
             # Get the maximum possible C value 10 * (highest density, lowest frequency and highest exponent)
-            c_max = log(100 * max(pxx) * f[0] ** 2)
+            c_max = log(100.0 * max(pxx) * f[0] ** 2)
             # Get the minimum possible C value 0.1 * (lowest density, highest frequency and lowest exponent)
             c_min = log(0.01 * min(pxx) * f[f.shape[0] - 1] ** -2)
             # [-2, 2] bounds to cover expected range of exponents, log(c_i) to improve numerical stability
-            bounds = [(c_min, c_max)] * n + [(-2, 2)] * n
+            bounds = [(c_min, c_max)] * n + [(-2.0, 2.0)] * n
 
             # Global optimization to get initial guesses
             global_opt = differential_evolution(
@@ -228,7 +228,7 @@ def fit_noise(
                 n_regimes=n,
                 cs=exp(local_opt.x[:len(local_opt.x) // 2]),
                 ms=local_opt.x[len(local_opt.x) // 2:],
-                alphas=[(m + 1) / 2 for m in local_opt.x[len(local_opt.x) // 2:]],
+                alphas=[(m + 1.0) / 2.0 for m in local_opt.x[len(local_opt.x) // 2:]],
                 SSLE=local_opt.fun,
                 success=local_opt.success,
                 global_opt=global_opt,
@@ -293,7 +293,7 @@ def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> 
         fits[n]['n_regimes'] = n
         fits[n]['crossovers'] = exp(result.x[:n - 1])
         fits[n]['ms'] = -(diff(result.x[n - 1:]) / diff(concatenate((f[0], result.x[:n - 1], f[len(f) - 1]))))
-        fits[n]['alphas'] = [(m + 1) / 2 for m in fits[n]['ms']],
+        fits[n]['alphas'] = [(m + 1.0) / 2.0 for m in fits[n]['ms']],
         fits[n]['MSE'] = result.fun
         fits[n]['success'] = result.success
         fits[n]['opt'] = result
@@ -302,8 +302,8 @@ def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> 
 
 
 def generate_noise(
-    alphas: list[float],
-    cs: list[float],
+    alphas: ndarray[float],
+    cs: ndarray[float],
     length: int,
     sample_rate: int,
     complex_gen: bool = False,
@@ -319,8 +319,8 @@ def generate_noise(
     trace the values were derived from.
 
     Args:
-        alphas (list[float]): The detrended fluctuation analysis (DFA) alpha exponents (directly related to H) of the noise regimes.
-        cs (list[float]): The frequency domain numerators (directly related to variance) of the noise regimes.
+        alphas (ndarray[float]): The detrended fluctuation analysis (DFA) alpha exponents (directly related to H) of the noise regimes.
+        cs (ndarray[float]): The frequency domain numerators (directly related to variance) of the noise regimes.
         length (int): The length of the noise regimes to generate.
         sample_rate (int): The sample rate of the noise regimes.
         complex_gen (bool): Whether to generate noise regimes starting with complex noise. Default is False.
@@ -366,14 +366,14 @@ def generate_noise(
 Internal API
 """
 
-def _objective(params: list[float], f: ndarray, pxx: ndarray, p_filter: ndarray) -> float:
+def _objective(params: ndarray, f: ndarray, pxx: ndarray, p_filter: ndarray) -> float:
     """
     The objective function for fitting noise regimes. It calculates the sum of squared log error between a composition
     of noise regimes post-anti-aliasing filtering and the provided power spectral density (PSD). (No error handling
     is done here, don't flame me about assert efficiency with cython.)
 
     Args:
-        params (list[float]): The parameters to fit, consisting of exponents (m_i) and log numerators (c_i) for each regime.
+        params (ndarray): The parameters to fit, consisting of exponents (m_i) and log numerators (c_i) for each regime.
         f (ndarray): The frequency array of the true noise.
         pxx (ndarray): The PSD array of the true noise.
         p_filter (ndarray): The power response of the anti-aliasing filter.
@@ -525,16 +525,16 @@ def _generate_regime(
         raise ValueError("C must be a positive value.")
 
     # We generate everything starting at fGn via differentiation or integration
-    if alpha > 1:
+    if alpha > 1.0:
         h = alpha - 1
-    elif alpha < 0:
+    elif alpha < 0.0:
         h = alpha + 1
     else:
         h = alpha
 
     # Take next power of 2 for speed and long-range accuracy
     n = int(2 ** ceil(log2(length)))
-    f = fftfreq(n, d=1 / sample_rate)
+    f = fftfreq(n, d=1.0 / sample_rate)
 
     # Start with complex white noise or transformed white noise
     rng = default_rng(random_state)
@@ -545,23 +545,30 @@ def _generate_regime(
         spectrum = fft(white_noise)
 
     # Spectral shape that fool
-    s_f = concatenate(([0.0], 1 / (abs(f[1:]) ** (2 * h - 1))))
+    s_f = concatenate(([0.0], 1.0 / (abs(f[1:]) ** (2.0 * h - 1.0))))
     spectrum = spectrum * sqrt(s_f)
 
     # Transform
-    if alpha > 1:  # Cumulative sum of fGn is fBm
+    if alpha > 1.0:  # Cumulative sum of fGn is fBm
         spectrum = fft(cumsum(ifft(spectrum)))
-    elif alpha < 0:  # First derivative of fGn is fWn
+    elif alpha < 0.0:  # First derivative of fGn is fWn
         if complex_gen:
             spectrum = fft(diff(ifft(spectrum)))
         else:
             spectrum *= (2j * pi * f)
 
     # Scale via difference of integrals
-    f2, pxx2 = get_psd(ifft(spectrum).real, sample_rate, fmin=1, fmax=sample_rate // 4, psd_period=psd_period, nfft=nfft)
+    f2, pxx2 = get_psd(ifft(spectrum).real, sample_rate, fmin=1.0, fmax=sample_rate // 4.0, psd_period=psd_period, nfft=nfft)
+    mask = (f2 > 0)
+    f2, pxx2 = f2[mask], pxx2[mask]
     current_integral = simpson(pxx2, x=f2)
-    exponent = 1 - (2 * alpha - 1)
-    d_squared = current_integral / ((f2[len(f2) - 1] ** exponent - f2[0] ** exponent) / exponent)
+    exponent = 1.0 - (2.0 * alpha - 1.0)
+    # Special case when alpha == 1
+    if exponent == 0:
+        integral =  log(f2[len(f2) - 1] / f2[0])
+    else:
+        integral = ((f2[len(f2) - 1] ** exponent - f2[0] ** exponent) / exponent)
+    d_squared = current_integral / integral
     spectrum *= sqrt(c / d_squared)
 
     # Inverse
@@ -640,8 +647,8 @@ def _compute_sam(
             continue
 
         # Get the PSD of the true noise and the generated noise
-        _, pxx = get_psd(noise, sample_rate, fmax=sample_rate // 2, psd_period=psd_period, nfft=nfft)
-        _, pxx2 = get_psd(result.total[:len(noise)], sample_rate, fmax=sample_rate // 2, psd_period=psd_period, nfft=nfft)
+        _, pxx = get_psd(noise, sample_rate, fmax=sample_rate // 2.0, psd_period=psd_period, nfft=nfft)
+        _, pxx2 = get_psd(result.total[:len(noise)], sample_rate, fmax=sample_rate // 2.0, psd_period=psd_period, nfft=nfft)
 
         # Compute the spectral angle mapping (SAM)
         result.SAM = arccos(sum(log(pxx) * log(pxx2)) / (sqrt(sum(log(pxx) ** 2)) * sqrt(sum(log(pxx2) ** 2))))
