@@ -1,53 +1,59 @@
-import os.path
-from setuptools import find_packages, setup, Extension
+import ast
+from pathlib import Path
+from setuptools import setup, Extension
 from Cython.Build import cythonize
 
-this_directory = os.path.abspath(os.path.dirname(__file__))
-with open(os.path.join(this_directory, "README.md"), encoding="utf-8") as f:
-    long_description = f.read()
 
-setup(
-    name="notnormal",
-    version="0.1.0",
-    author="el20dlgc",
-    author_email="el20dlgc@leeds.ac.uk",
-    description="This package revolves around the NotNormal algorithm, which combines estimation and iteration to "
-                "automatically extract events from (nano)electrochemical time series data.",
-    long_description=long_description,
-    packages=find_packages() + ["notnormal.data"],
-    install_requires=[
-        "Cython>=3.0",
-        "numpy",
-        "scipy",
-        "stochastic",
-        "ttkbootstrap",
-        "matplotlib",
-        "pyabf",
-        "psutil"
+"""
+Auto-generator for Cython extensions
+"""
+
+def uses_cython(file: Path) -> bool:
+    try:
+        tree = ast.parse(file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                if any(alias.name == "cython" for alias in node.names):
+                    return True
+            elif isinstance(node, ast.ImportFrom):
+                if node.module and node.module.startswith("cython"):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def discover_extensions():
+    extensions = []
+    for pyfile in Path("notnormal").rglob("*.py"):
+        if pyfile.name == "__init__.py":
+            continue
+        if uses_cython(pyfile):
+            modname = ".".join(pyfile.relative_to(".").with_suffix("").parts)
+            extensions.append((modname, str(pyfile)))
+    return extensions
+
+
+ext_modules = cythonize(
+    module_list=[
+        Extension(name, [src], define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")])
+        for name, src in discover_extensions()
     ],
-    classifiers=[
-        "Development Status :: 3 - Alpha",
-        "Programming Language :: Python :: 3 :: Only",
-        "Programming Language :: Python :: 3.13",
-        "Intended Audience :: Science/Research",
-        "Natural Language :: English"
-    ],
-    include_package_data=True,
-    package_data={'': ['data/*']},
-    ext_modules=cythonize(
-        [
-            Extension("notnormal.not_normal", ["notnormal/not_normal.py"],
-                      define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')]),
-            Extension("notnormal.not_normal_gui", ["notnormal/not_normal_gui.py"],
-                      define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')]),
-            Extension("notnormal.results", ["notnormal/results.py"],
-                      define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')])
-        ],
-        compiler_directives={
-            'language_level': 3,
-        },
-        quiet=True,
-        show_all_warnings=False,
-        annotate=False,
-    )
+    compiler_directives={
+        'language_level': 3,
+        'boundscheck': False,
+        'wraparound': False,
+        'initializedcheck': False,
+        'nonecheck': False,
+        'cdivision': True,
+        'infer_types': True,
+        'annotation_typing': True
+    },
+    quiet=True,
+    show_all_warnings=False,
+    annotate=False,
+    build_dir="build",
 )
+
+
+setup(ext_modules=ext_modules)

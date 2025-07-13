@@ -1,17 +1,25 @@
 """
 This module provides functions to simulate traces with noise, baseline, and events for (nano)electrochemical time series
-data.
+data. WARNING: This module will be deprecated on conclusion of my PhD, it is a rather basic implementation but offers
+a quick and easy way to produce testing data.
 """
 
 from typing import Optional
 from stochastic.processes.noise import FractionalGaussianNoise as Fgn
 from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
 from stochastic.processes.noise import VioletNoise as Vn, BlueNoise as Bn
-from numpy import mean, std, zeros, arange, sqrt
+from numpy import mean, std, zeros, arange, sqrt, sum, ndarray, max
 from numpy.random import default_rng
 from scipy.signal import get_window
 from copy import deepcopy
+import cython
 
+_COMPILED = cython.compiled
+
+
+"""
+Public API
+"""
 
 def simulate_trace(
     length: int,
@@ -86,7 +94,7 @@ def simulate_trace(
     # Combine the events and reorder
     events = [event for sublist in events for event in sublist]
     # Add the events to the trace
-    trace, events, coordinate_trace = add_events(trace, events, length, sample_rate)
+    trace, events, coordinate_trace = _add_events(trace, events, length, sample_rate)
     # Reorder the events
     events = sorted(events, key=lambda x: x['Coordinates'][0])
     events = [{'ID': i + 1, **event} for i, event in enumerate(events)]
@@ -130,7 +138,7 @@ def simulate_regime(alpha: float, sigma: float, length: int):
     # Rescale to get the desired standard deviation
     regime_mean = mean(regime)
     regime_std = std(regime)
-    for i in range(length):
+    for i in range(len(regime)):
         regime[i] += (sigma - regime_std) * ((regime[i] - regime_mean) / regime_std)
     regime -= mean(regime)
 
@@ -180,7 +188,8 @@ def simulate_events(
     window: str,
     direction: str,
     event_number: int,
-    sample_rate: int
+    sample_rate: int,
+    random_state: Optional[int] = None
 ):
     """
     Simulate events.
@@ -194,6 +203,7 @@ def simulate_events(
         direction (str): The direction of the events ('up' or 'down').
         event_number (int): The number of events to simulate.
         sample_rate (int): The sample rate of the trace.
+        random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
         list: A list of simulated event dictionaries.
@@ -202,7 +212,7 @@ def simulate_events(
     if event_number == 0:
         return []
 
-    rng = default_rng()
+    rng = default_rng(seed=random_state)
     # Calculate amplitudes of these events
     amplitudes = abs(rng.normal(amplitude, amplitude_std, event_number))
     # Calculate the durations of these events (convert from ms)
@@ -232,7 +242,11 @@ def simulate_events(
     return events
 
 
-def add_events(trace: list, events: list, length: int, sample_rate: int):
+"""
+Internal API
+"""
+
+def _add_events(trace: list, events: list, length: int, sample_rate: int, random_state: Optional[int] = None):
     """
     Add events to a trace and modify the event dictionaries accordingly.
 
@@ -241,12 +255,13 @@ def add_events(trace: list, events: list, length: int, sample_rate: int):
         events (list): A list of event dictionaries to add to the trace.
         length (int): The length of the trace.
         sample_rate (int): The sample rate of the trace.
+        random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
         tuple: A tuple containing the modified trace, event dictionaries and the coordinate trace.
     """
 
-    rng = default_rng()
+    rng = default_rng(seed=random_state)
     coordinate_trace = zeros(length)
     i = 0
     while i < len(events):
