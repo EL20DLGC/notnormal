@@ -5,7 +5,7 @@ data.
 
 from numpy import quantile, sign, sort, concatenate, sqrt, round, ones, zeros, mean, ceil, cumsum, abs, compress, \
     percentile, ndarray, std, sum, max, median, asarray, array_split, double, int64, uint8, flatnonzero, empty, \
-    bitwise_xor, greater_equal, less_equal, searchsorted, column_stack, full, minimum, maximum, roll, pad, argsort
+    bitwise_xor, greater_equal, less_equal, searchsorted, column_stack, full, minimum, maximum, roll, pad, argsort, int8
 from scipy.signal import oaconvolve
 from scipy.integrate import simpson
 from scipy.ndimage import median_filter
@@ -86,6 +86,120 @@ def not_normal(
     return iteration_results, estimate_results
 
 
+def initial_estimate(
+    trace: ndarray | Trace,
+    filtered_trace: Optional[ndarray] = None,
+    sample_rate: Optional[int] = None,
+    estimate_cutoff: cython.double = 10.0,
+    replace_factor: cython.double = 8.0,
+    replace_gap: cython.double = 2.0,
+    threshold_window: cython.double = 2.0,
+    z_score: Optional[float] = None,
+    output_features: Optional[str] = 'full',
+    vector_results: cython.bint = False,
+    _validate: cython.bint = True
+) -> InitialEstimateResults:
+    """
+    Provides an initial estimate for the maximum cutoff frequency and event direction for the iterate function. The output
+    events can also be used for wavelet filtering (notnormal.filter.methods.wavelet_filter). This is an improved version
+    of the conventional event extraction method, using a robust sequence of iterations to make an initial estimate on
+    the event population. From this, automatic iteration can be performed with the maximised cutoff frequency and event
+    direction. The only required parameters are the input trace and sample_rate, with the estimate_cutoff frequency
+    being the primary tuning parameter and ultimately decides how accurate the initial estimate is. Other parameters
+    are provided for fine-tuning.
+
+    Note: Both replace_factor and replace_gap as 0.0 indicates baseline replacement instead of individual replacement.
+
+    Args:
+        trace (ndarray | Trace): The input trace or a Trace object. If ndarray, the sample rate must be provided.
+        filtered_trace (ndarray | None): The filtered version of the input trace, used for bounding events. If None,
+            the trace is used. Default is None.
+        sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
+        estimate_cutoff (float): The initial estimate for the cutoff frequency. Default is 10.0.
+        replace_factor (float): Factor for replacing events in the calculation trace. Default is 8.0.
+        replace_gap (float): Gap for replacing events in the calculation trace. Default is 2.0.
+        threshold_window (float): The window size for threshold calculation. Default is 2.0.
+        z_score (float | None): The Z-score for event detection. If None, it is calculated based on the trace length.
+            Default is None.
+        output_features (str | None): The output event features. Can be 'full' for absolute features, 'FWHM', or 'FWQM'
+            for full width at half maximum or quarter maximum, respectively. These apply to duration, area, and peak
+            amplitude. None specifies no events on the output. Default is 'full'.
+        vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
+        _validate (bool): Whether to validate the inputs. Do not disable unless you have validated externally.
+            Default is True.
+
+    Returns:
+        InitialEstimateResults: An object containing the initial estimate results.
+    """
+
+    # Validate all the inputs
+    trace, sample_rate, label, filtered_trace, z_score, bl_args, lr_args = _validate_input(trace, estimate_cutoff,
+        filtered_trace, sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features, _validate=_validate)
+
+    # Get args
+    args = {'sample_rate': sample_rate, 'estimate_cutoff': estimate_cutoff, 'replace_factor': replace_factor,
+            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
+            'output_features': output_features, 'vector_results': vector_results, '_validate': _validate}
+    results = InitialEstimateResults(InitialEstimateArgs(**args))
+
+    # Easter egg
+    calc_trace = trace
+    coordinates = None
+    current = None
+
+    # Iterate 3 times
+    i: cython.int = 1
+    for i in range(3):
+        if i == 0:
+            # Baseline, threshold, and trace statistics on the calculation trace
+            baseline, threshold, trace_stats = _baseline_threshold(calc_trace, event_coordinates=coordinates, **bl_args)
+        else:
+            # Do not compute trace statistics after the first iteration
+            baseline, threshold = _baseline_threshold(calc_trace, event_coordinates=None, compute_stats=False, **bl_args)
+
+        # Store results if vector_results or the final iteration
+        current = Iteration()
+        if vector_results or i == 2:
+            current.calculation_trace, current.baseline, current.threshold = calc_trace, baseline, threshold
+
+        if i == 0:
+            # (1) Remove events from the side of most influence (save this initial threshold and direction)
+            event_direction = 'up' if trace_stats['Influence'] > 0 else 'down'
+            results.initial_threshold, results.event_direction, current.trace_stats = threshold, event_direction, trace_stats
+            coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
+                                                                   event_direction, **lr_args)
+        elif i == 1:
+            # (2) Remove events from the opposite side
+            coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
+                                                       'up' if results.event_direction == 'down' else 'down', **lr_args)
+        else:
+            # (3) Final extraction now both sides are removed
+            coordinates, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
+                                                       'biphasic', replace=False, **lr_args)
+
+        # Store results
+        current.event_coordinates, current.event_stats = coordinates, event_stats
+        results.iterations.append(current)
+
+
+    # (4) Calculate the required cutoffs (using the initial threshold)
+    event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(trace, baseline, results.initial_threshold, coordinates,
+                                                                estimate_cutoff, sample_rate)
+    results.max_cutoff = event_stats['Max Cutoff']
+
+    # If events are requested
+    if output_features is not None:
+        # Extract the events
+        results.events = simple_extractor(trace, baseline, coordinates, sample_rate, output_features, label)
+        results.events.add_feature('Max Cutoff', all_cutoffs)
+
+        # Expected number of extractions which are not events
+        event_stats['False Positives'], event_stats['Significant Events'] = _expected_outliers(trace, baseline, threshold,
+                                                                                               coordinates, z_score)
+
+    return results
+
+
 def parallel_iterate(
     trace: ndarray | Trace,
     cutoff: cython.double,
@@ -128,6 +242,7 @@ def parallel_iterate(
     """
 
     # Validate all the inputs
+    obj = trace
     trace, sample_rate, label, filtered_trace, z_score, _, _ = _validate_input(trace, cutoff, filtered_trace, sample_rate,
                                 replace_factor, replace_gap, threshold_window, z_score, output_features, event_direction)
 
@@ -142,7 +257,7 @@ def parallel_iterate(
 
     # Not worth it to parallelize if the trace is too small
     if splits < 5:
-        result = iterate(trace, cutoff, event_direction, filtered_trace, sample_rate, replace_factor, replace_gap,
+        result = iterate(obj, cutoff, event_direction, filtered_trace, sample_rate, replace_factor, replace_gap,
                        threshold_window, z_score, output_features, vector_results, _validate=True)
         return result
 
@@ -320,8 +435,8 @@ def iterate(
     trace_stats = current.trace_stats
     coordinate_view: cython.longlong[:, ::1] = current.event_coordinates
     baseline = _event_replacer(baseline, calc_trace, coordinate_view, replace_factor=0, replace_gap=0)
-    threshold = _thresholder((asarray(calc_trace) - asarray(baseline)), z_score, int(threshold_window * sample_rate),
-                              method='std', event_mask=__event_mask(current.event_coordinates, len(trace)))
+    threshold = _thresholder((calc_trace - baseline), z_score, int(threshold_window * sample_rate), method='std',
+                             event_mask=__event_mask(current.event_coordinates, len(trace)))
     coordinates, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
                                           'biphasic', replace=False, **lr_args)
 
@@ -340,122 +455,8 @@ def iterate(
                                                                                                coordinates, z_score)
 
     # Store the final vectors
-    results.iterations.append(Iteration(calculation_trace=asarray(calc_trace), baseline=asarray(baseline), threshold=threshold,
+    results.iterations.append(Iteration(calculation_trace=calc_trace, baseline=baseline, threshold=threshold,
                                         trace_stats=trace_stats, event_coordinates=coordinates, event_stats=event_stats))
-
-    return results
-
-
-def initial_estimate(
-    trace: ndarray | Trace,
-    filtered_trace: Optional[ndarray] = None,
-    sample_rate: Optional[int] = None,
-    estimate_cutoff: cython.double = 10.0,
-    replace_factor: cython.double = 8.0,
-    replace_gap: cython.double = 2.0,
-    threshold_window: cython.double = 2.0,
-    z_score: Optional[float] = None,
-    output_features: Optional[str] = 'full',
-    vector_results: cython.bint = False,
-    _validate: cython.bint = True
-) -> InitialEstimateResults:
-    """
-    Provides an initial estimate for the maximum cutoff frequency and event direction for the iterate function. The output
-    events can also be used for wavelet filtering (notnormal.filter.methods.wavelet_filter). This is an improved version
-    of the conventional event extraction method, using a robust sequence of iterations to make an initial estimate on
-    the event population. From this, automatic iteration can be performed with the maximised cutoff frequency and event
-    direction. The only required parameters are the input trace and sample_rate, with the estimate_cutoff frequency
-    being the primary tuning parameter and ultimately decides how accurate the initial estimate is. Other parameters
-    are provided for fine-tuning.
-
-    Note: Both replace_factor and replace_gap as 0.0 indicates baseline replacement instead of individual replacement.
-
-    Args:
-        trace (ndarray | Trace): The input trace or a Trace object. If ndarray, the sample rate must be provided.
-        filtered_trace (ndarray | None): The filtered version of the input trace, used for bounding events. If None,
-            the trace is used. Default is None.
-        sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
-        estimate_cutoff (float): The initial estimate for the cutoff frequency. Default is 10.0.
-        replace_factor (float): Factor for replacing events in the calculation trace. Default is 8.0.
-        replace_gap (float): Gap for replacing events in the calculation trace. Default is 2.0.
-        threshold_window (float): The window size for threshold calculation. Default is 2.0.
-        z_score (float | None): The Z-score for event detection. If None, it is calculated based on the trace length.
-            Default is None.
-        output_features (str | None): The output event features. Can be 'full' for absolute features, 'FWHM', or 'FWQM'
-            for full width at half maximum or quarter maximum, respectively. These apply to duration, area, and peak
-            amplitude. None specifies no events on the output. Default is 'full'.
-        vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
-        _validate (bool): Whether to validate the inputs. Do not disable unless you have validated externally.
-            Default is True.
-
-    Returns:
-        InitialEstimateResults: An object containing the initial estimate results.
-    """
-
-    # Validate all the inputs
-    trace, sample_rate, label, filtered_trace, z_score, bl_args, lr_args = _validate_input(trace, estimate_cutoff,
-        filtered_trace, sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features, _validate=_validate)
-
-    # Get args
-    args = {'sample_rate': sample_rate, 'estimate_cutoff': estimate_cutoff, 'replace_factor': replace_factor,
-            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
-            'output_features': output_features, 'vector_results': vector_results, '_validate': _validate}
-    results = InitialEstimateResults(InitialEstimateArgs(**args))
-
-    # Easter egg
-    calc_trace = trace
-    coordinates = None
-    current = None
-
-    # Iterate 3 times
-    i: cython.int = 1
-    for i in range(3):
-        if i == 0:
-            # Baseline, threshold, and trace statistics on the calculation trace
-            baseline, threshold, trace_stats = _baseline_threshold(calc_trace, event_coordinates=coordinates, **bl_args)
-        else:
-            # Do not compute trace statistics after the first iteration
-            baseline, threshold = _baseline_threshold(calc_trace, event_coordinates=None, compute_stats=False, **bl_args)
-
-        # Store results if vector_results or the final iteration
-        current = Iteration()
-        if vector_results or i == 2:
-            current.calculation_trace, current.baseline, current.threshold = asarray(calc_trace), baseline, threshold
-
-        if i == 0:
-            # (1) Remove events from the side of most influence (save this initial threshold and direction)
-            event_direction = 'up' if trace_stats['Influence'] > 0 else 'down'
-            results.initial_threshold, results.event_direction, current.trace_stats = threshold, event_direction, trace_stats
-            coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                                   event_direction, **lr_args)
-        elif i == 1:
-            # (2) Remove events from the opposite side
-            coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                       'up' if results.event_direction == 'down' else 'down', **lr_args)
-        else:
-            # (3) Final extraction now both sides are removed
-            coordinates, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                       'biphasic', replace=False, **lr_args)
-
-        # Store results
-        current.event_coordinates, current.event_stats = coordinates, event_stats
-        results.iterations.append(current)
-
-
-    # (4) Calculate the required cutoffs (using the initial threshold)
-    event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(trace, baseline, results.initial_threshold, coordinates,
-                                                                estimate_cutoff, sample_rate)
-    results.max_cutoff = event_stats['Max Cutoff']
-
-    # If events are requested
-    if output_features is not None:
-        # Extract the events
-        results.events = simple_extractor(trace, baseline, coordinates, sample_rate, output_features, label)
-        results.events.add_feature('Max Cutoff', all_cutoffs)
-
-        # Expected number of extractions which are not events
-        event_stats['False Positives'], event_stats['Significant Events'] = _expected_outliers(trace, baseline, threshold,
-                                                                                               coordinates, z_score)
 
     return results
 
@@ -497,41 +498,44 @@ def simple_extractor(
     if feature_type not in ('full', 'FWHM', 'FWQM'):
         raise ValueError("Feature type must be 'full', 'FWHM', or 'FWQM'.")
 
-    # Get view
-    event_coordinates: cython.longlong[:, ::1] = asarray(event_coordinates)
-
-    # Baseline adjust the trace
-    adjusted = trace - baseline
-
-
+    # Early return if no events
     event_number: cython.Py_ssize_t = event_coordinates.shape[0]
     if event_number == 0:
         return Events(label, {}, feature_type)
 
+    # Get view
+    coordinates: cython.longlong[:, ::1] = event_coordinates
+
+    # Baseline adjust the trace
+    adjusted: cython.double[::1] = trace - baseline
+
     events = {}
     event_id: cython.Py_ssize_t = 0
     for event_id in range(event_number):
-        vector = adjusted[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1].copy()
+        vector = adjusted[coordinates[event_id, 0]:coordinates[event_id, 1] + 1]
 
-        abs_vector = abs(vector)
         # Different feature types
         if feature_type == 'FWHM':
-            threshold = max(abs_vector) / 2
-            vec = vector[abs_vector >= threshold]
+            abs_vector = abs(vector)
+            vec = asarray(vector)
+            vec = vec[abs_vector >= max(abs_vector) / 2]
         elif feature_type == 'FWQM':
-            threshold = max(abs_vector) / 4
-            vec = vector[abs_vector >= threshold]
+            abs_vector = abs(vector)
+            vec = asarray(vector)
+            vec = vec[abs_vector >= max(abs_vector) / 4]
         else:
             vec = vector
 
+        # Calculate featuers
+        abs_vector = abs(vec)
         events[event_id + 1] = {
             'ID': event_id + 1,
-            'Coordinates': (event_coordinates[event_id, 0], event_coordinates[event_id, 1]),
-            'Vector': vector,
+            'Coordinates': (coordinates[event_id, 0], coordinates[event_id, 1]),
+            'Vector': asarray(vector),
             'Direction': 'up' if sum(sign(vector)) > 0 else 'down',
-            'Amplitude': max(abs(vec)),
+            'Amplitude': max(abs_vector),
             'Duration': len(vec) / sample_rate * 1e3,
-            'Area': simpson(abs(vec)) / sample_rate,
+            'Area': simpson(abs_vector) / sample_rate,
             'Outlier': False
         }
 
@@ -657,7 +661,7 @@ def _expected_outliers(
     assert trace.shape == baseline.shape == threshold.shape
 
     # Cast to view
-    event_coordinates: cython.longlong[:, ::1] = event_coordinates
+    coordinates: cython.longlong[:, ::1] = event_coordinates
 
     # Single outlier z_score expectation
     max_z: cython.double = norm.ppf(1.0 - ((1.0 / len(trace)) / 2.0))
@@ -672,8 +676,8 @@ def _expected_outliers(
     event_start: cython.Py_ssize_t
     event_end: cython.Py_ssize_t
     for event_id in range(event_number):
-        event_start = event_coordinates[event_id, 0]
-        event_end = event_coordinates[event_id, 1]
+        event_start = coordinates[event_id, 0]
+        event_end = coordinates[event_id, 1]
 
         if max(adjusted[event_start:event_end]) > max_threshold[event_end]:
             total_length += event_end - event_start + 1
@@ -711,11 +715,12 @@ def _calculate_cutoffs(
 
     # Baseline adjust the trace
     adjusted: cython.double[::1] = abs(trace - baseline)
+
     # Initialise the maximum cutoffs array and views
     event_number: cython.Py_ssize_t = event_coordinates.shape[0]
     max_cutoffs: cython.double[::1] = zeros(event_number, dtype=trace.dtype)
-    threshold: cython.double[::1] = threshold
-    event_coordinates: cython.longlong[:, ::1] = event_coordinates
+    thresh: cython.double[::1] = threshold
+    coordinates: cython.longlong[:, ::1] = event_coordinates
 
     # Calculate the cutoff frequency for each event
     time_step: cython.double = 1.0 / sample_rate
@@ -725,12 +730,13 @@ def _calculate_cutoffs(
     vector: cython.double[::1]
     damping_ratio: cython.double
     for event_id in range(event_number):
-        event_start = event_coordinates[event_id, 0]
-        event_end = event_coordinates[event_id, 1]
+        event_start = coordinates[event_id, 0]
+        event_end = coordinates[event_id, 1]
+        vector = adjusted[event_start:event_end + 1]
 
         # Get the damping ratio for the event
-        vector = adjusted[event_start:event_end + 1]
-        damping_ratio = (max(vector) / (max(vector) - threshold[event_end]))
+        max_vec = max(vector)
+        damping_ratio = (max_vec / (max_vec - thresh[event_end]))
 
         # -3dB of boxcar by length
         max_cutoffs[event_id] = 0.442947 / (sqrt((len(vector) * damping_ratio) ** 2 - 1) * time_step)
@@ -748,7 +754,7 @@ def _calculate_cutoffs(
 
     # Do not want to be above recommended antialiasing cutoff
     aa_limit: cython.double = sample_rate / 5.0
-    if calculated_cutoff >= aa_limit:
+    if not 0.0 < calculated_cutoff < aa_limit:
         calculated_cutoff = aa_limit
 
     return calculated_cutoff, asarray(max_cutoffs)
@@ -909,7 +915,7 @@ def _sort_coordinates(adjusted: ndarray, event_coordinates: cython.longlong[:, :
         return sorted_coords
 
     # Baseline adjust the trace
-    adjusted: cython.double[::1] = abs(adjusted)
+    adj: cython.double[::1] = abs(adjusted)
 
     # Calculate the score for each event based on its duration and maximum amplitude
     scores: cython.double[::1] = empty(event_number, dtype=float)
@@ -927,13 +933,14 @@ def _sort_coordinates(adjusted: ndarray, event_coordinates: cython.longlong[:, :
         # Find max abs event in the interval
         max_amp = 0.0
         for j in range(event_start, event_end):
-            if adjusted[j] > max_amp:
-                max_amp = adjusted[j]
+            if adj[j] > max_amp:
+                max_amp = adj[j]
         scores[event_id] = max_amp * event_length
 
     # Sort the events by score (descending order)
     order = argsort(-asarray(scores), kind='stable')
     sorted_coords: cython.longlong[:, ::1] = asarray(event_coordinates)[order]
+
     return sorted_coords
 
 
@@ -971,8 +978,8 @@ def _event_replacer(
         baseline_view: cython.double[::1] = baseline
         for event_id in range(event_number):
             padded_trace[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1] = (
-                        baseline_view[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1])
-        return padded_trace
+            baseline_view[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1])
+        return asarray(padded_trace)
 
     # Pad now to avoid padding in the loop (largest event)
     event_starts = asarray(event_coordinates[:, 0])
@@ -1032,7 +1039,7 @@ def _event_replacer(
         filtered_segment = oaconvolve(segment, window, 'same')
         padded_trace[event_start:event_end] = filtered_segment[half_length:len(filtered_segment) - half_length]
 
-    return padded_trace[longest_window:len(padded_trace) - longest_window].copy()
+    return asarray(padded_trace[longest_window:len(padded_trace) - longest_window])
 
 
 def _baseline_threshold(
@@ -1131,7 +1138,7 @@ def _baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.
     # Moving average
     baseline = (baseline[length:] - baseline[:len(baseline) - length]) / length
 
-    return baseline.copy()
+    return baseline
 
 
 def _thresholder(
@@ -1156,7 +1163,7 @@ def _thresholder(
         ndarray: The calculated threshold.
     """
 
-    # Baseline adjust the trace
+    # Get view for slicing
     adj: cython.double[::1] = adjusted
 
     # Number of segments to divide the trace into
@@ -1176,10 +1183,10 @@ def _thresholder(
         start = i * window
         end = (i + 1) * window if i != segments - 1 else length
 
-        # Mask events if event_mask is provided
-        data_segment = adj[start:end]
-        mask = asarray(event_mask[start:end], dtype=bool)
-        current_segment = compress(~mask, data_segment)
+        # Mask events
+        data_segment = asarray(adj[start:end])
+        mask_segment = asarray(event_mask[start:end], dtype=bool)
+        current_segment = data_segment[~mask_segment]
 
         if current_segment.shape[0] < 2:
             current_segment = data_segment
@@ -1211,8 +1218,7 @@ def _trace_statistics(
     """
 
     # Get the masked adjusted
-    mask = asarray(event_mask, dtype=bool)
-    adjusted: cython.double[::1] = adjusted[~mask]
+    adjusted = adjusted[~asarray(event_mask, dtype=bool)]
 
     results = {}
     # Warnings from Shapiro p-value calculation (not needed)
@@ -1246,10 +1252,12 @@ def __find_crosses(sign_mask: cython.uchar[::1], pair_match: cython.bint = True)
         ndarray: Indices where the sign mask changes sign.
     """
 
-    # XOR successive bools without an intermediate allocation
     n: cython.Py_ssize_t = sign_mask.shape[0]
     if n < 2:
-        return empty(0, dtype=int64)
+        out: cython.longlong[::1] = empty(0, dtype=int64)
+        return out
+
+    # XOR successive bools without an intermediate allocation
     zero_trace = empty(n - 1, dtype=uint8)
     bitwise_xor(sign_mask[:n - 1], sign_mask[1:], out=zero_trace)
     flips: cython.longlong[::1] = flatnonzero(zero_trace).astype(int64, copy=False)
@@ -1308,7 +1316,7 @@ def __event_bounds(
         right = full(n, length - 1, dtype=int64)
     else:
         # Nearest baseline cross left of each start
-        left_idx = searchsorted(baseline_idxs, starts, side='right') - 1
+        left_idx = searchsorted(baseline_id, starts, side='right') - 1
         fell_off = (left_idx == -1)
         left_idx[fell_off] = 0
         left = baseline_id[left_idx]
@@ -1351,7 +1359,7 @@ def __event_mask(event_coordinates: ndarray, length: cython.Py_ssize_t) -> cytho
         return event_mask
 
     # Differential array, (1, -1) for bounds of event
-    delta: cython.uchar[::1] = zeros(length + 1, dtype=uint8)
+    delta: cython.char[::1] = zeros(length + 1, dtype=int8)
     event_id: cython.Py_ssize_t = 0
     start_start: cython.Py_ssize_t
     event_end: cython.Py_ssize_t

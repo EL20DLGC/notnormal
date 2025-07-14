@@ -55,7 +55,7 @@ def wavelet_filter(
         u_length (int): Number of splits for the ultimate level (must be 2^N). Default is 2.
         p_length (int): Number of splits for the penultimate level (must be 2^N). Default is 2.
         q_pop (float): Quantile of the population to estimate the characteristic event frequency in [0, 1]. Default is 0.5.
-        q_thresh (float): Quantile threshold for mask gating in [0, 1]. Default is 0.05.
+        q_thresh (float): Quantile threshold for mask gating in (0, 1). Default is 0.05.
         mode (str): The thresholding mode, 'soft' or 'hard'. Default is 'soft'.
         full_results (bool): Whether to return the wavelet coefficients in the results. Default is False.
         verbose (bool): Whether to print verbose output during processing. Default is False.
@@ -482,7 +482,7 @@ def _get_wavelet_vars(
         coeffs (list[ndarray]): The trace coefficients, in the form [cAn, cDn, ..., cD1].
         coeffs_mask (list[ndarray]): The mask coefficients, in the form [cAn, cDn, ..., cD1].
         length (int): The length of the original trace.
-        q_thresh (float): Quantile threshold for mask gating in [0, 1]. Default is 0.05.
+        q_thresh (float): Quantile threshold for mask gating in (0, 1). Default is 0.05.
 
     Returns:
         tuple[ndarray, ndarray]: The signal variance and noise variance for each band.
@@ -490,8 +490,8 @@ def _get_wavelet_vars(
 
     if len(coeffs) != len(coeffs_mask):
         raise ValueError("Wavelet and mask coefficients must have the same length.")
-    if not (0 <= q_thresh <= 1):
-        raise ValueError("Threshold quantile must be in the range [0, 1].")
+    if not (0 < q_thresh < 1):
+        raise ValueError("Threshold quantile must be in the range (0, 1).")
 
     signal_var = []
     noise_var = []

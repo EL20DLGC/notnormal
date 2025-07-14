@@ -258,7 +258,7 @@
 </span><span id="wavelet_filter-56"><a href="#wavelet_filter-56"><span class="linenos"> 56</span></a><span class="sd">        u_length (int): Number of splits for the ultimate level (must be 2^N). Default is 2.</span>
 </span><span id="wavelet_filter-57"><a href="#wavelet_filter-57"><span class="linenos"> 57</span></a><span class="sd">        p_length (int): Number of splits for the penultimate level (must be 2^N). Default is 2.</span>
 </span><span id="wavelet_filter-58"><a href="#wavelet_filter-58"><span class="linenos"> 58</span></a><span class="sd">        q_pop (float): Quantile of the population to estimate the characteristic event frequency in [0, 1]. Default is 0.5.</span>
-</span><span id="wavelet_filter-59"><a href="#wavelet_filter-59"><span class="linenos"> 59</span></a><span class="sd">        q_thresh (float): Quantile threshold for mask gating in [0, 1]. Default is 0.05.</span>
+</span><span id="wavelet_filter-59"><a href="#wavelet_filter-59"><span class="linenos"> 59</span></a><span class="sd">        q_thresh (float): Quantile threshold for mask gating in (0, 1). Default is 0.05.</span>
 </span><span id="wavelet_filter-60"><a href="#wavelet_filter-60"><span class="linenos"> 60</span></a><span class="sd">        mode (str): The thresholding mode, &#39;soft&#39; or &#39;hard&#39;. Default is &#39;soft&#39;.</span>
 </span><span id="wavelet_filter-61"><a href="#wavelet_filter-61"><span class="linenos"> 61</span></a><span class="sd">        full_results (bool): Whether to return the wavelet coefficients in the results. Default is False.</span>
 </span><span id="wavelet_filter-62"><a href="#wavelet_filter-62"><span class="linenos"> 62</span></a><span class="sd">        verbose (bool): Whether to print verbose output during processing. Default is False.</span>
@@ -348,7 +348,7 @@ prevent large thresholds eliminating signal in levels where they are underrepres
 <li><strong>u_length (int):</strong>  Number of splits for the ultimate level (must be 2^N). Default is 2.</li>
 <li><strong>p_length (int):</strong>  Number of splits for the penultimate level (must be 2^N). Default is 2.</li>
 <li><strong>q_pop (float):</strong>  Quantile of the population to estimate the characteristic event frequency in [0, 1]. Default is 0.5.</li>
-<li><strong>q_thresh (float):</strong>  Quantile threshold for mask gating in [0, 1]. Default is 0.05.</li>
+<li><strong>q_thresh (float):</strong>  Quantile threshold for mask gating in (0, 1). Default is 0.05.</li>
 <li><strong>mode (str):</strong>  The thresholding mode, 'soft' or 'hard'. Default is 'soft'.</li>
 <li><strong>full_results (bool):</strong>  Whether to return the wavelet coefficients in the results. Default is False.</li>
 <li><strong>verbose (bool):</strong>  Whether to print verbose output during processing. Default is False.</li>

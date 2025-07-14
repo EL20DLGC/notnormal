@@ -344,13 +344,13 @@ class InitialEstimateArgs:
     A dataclass to represent the parameters for initial estimation. See: notnormal.extract.methods.initial_estimate.
     """
 
-    sample_rate: int
+    sample_rate: Optional[int]
     estimate_cutoff: float
     replace_factor: float
     replace_gap: float
     threshold_window: float
-    z_score: float
-    output_features: str
+    z_score: Optional[float]
+    output_features: Optional[str]
     vector_results: bool
     _validate: bool
 
@@ -374,12 +374,12 @@ class IterateArgs:
 
     cutoff: float
     event_direction: str
-    sample_rate: int
+    sample_rate: Optional[int]
     replace_factor: float
     replace_gap: float
     threshold_window: float
-    z_score: float
-    output_features: str
+    z_score: Optional[float]
+    output_features: Optional[str]
     vector_results: bool
     _validate: bool
 
@@ -603,7 +603,7 @@ class EventAugmentationArgs:
     A dataclass to represent the parameters for event augmentation. See: notnormal.reconstruct.events.augment_clusters.
     """
 
-    n_samples: int
+    n_vectors: Optional[int]
     max_k: int
     weight: float
     random_state: Optional[int]
@@ -850,9 +850,9 @@ class NoiseReconstructionArgs:
     A dataclass to represent the parameters for noise reconstruction. See: notnormal.reconstruct.noise.reconstruct_noise.
     """
 
-    n_regimes: int | list[int]
     aa_cutoff: int
     aa_order: int
+    n_regimes: int | list[int]
     sample_rate: Optional[int]
     maxiter: tuple[int, int]
     popsize: int

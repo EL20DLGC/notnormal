@@ -73,7 +73,7 @@ def load_trace(path: str, label: Optional[str] = None) -> Trace:
 
 def get_psd(
     trace: ndarray | Trace,
-    sample_rate: int,
+    sample_rate: Optional[int] = None,
     fmin: Optional[float] = None,
     fmax: Optional[float] = None,
     psd_period: Optional[float] = None,
@@ -84,7 +84,7 @@ def get_psd(
 
     Args:
         trace (ndarray | Trace): The trace to be processed or a Trace object.
-        sample_rate (int): The sample rate of the trace.
+        sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
         fmin (float | None): The minimum frequency for the PSD. Default is None.
         fmax (float | None): The maximum frequency for the PSD. Default is None.
         psd_period (float | None): The period for the PSD calculation. Default is None.
@@ -94,12 +94,11 @@ def get_psd(
     """
 
     if isinstance(trace, Trace):
-        trace = trace.trace
-
+        sample_rate, trace = trace.sample_rate, trace.trace
+    if sample_rate is None:
+        raise ValueError("Sample rate must be provided if trace is a ndarray.")
     if sample_rate <= 0:
         raise ValueError("Sample rate must be a positive integer.")
-    if int(psd_period * sample_rate) > len(trace) or psd_period <= 0:
-        raise ValueError("psd_period * sample_rate must be a positive value that does not exceed the length of the trace.")
 
     # Set the period if not provided
     if psd_period is None:
@@ -110,6 +109,9 @@ def get_psd(
             psd_period = length / sample_rate
         else:
             psd_period = 1.0
+
+    if int(psd_period * sample_rate) > len(trace) or psd_period <= 0:
+        raise ValueError("psd_period * sample_rate must be a positive value that does not exceed the length of the trace.")
 
     # Set the support if not provided
     if fmin is None:

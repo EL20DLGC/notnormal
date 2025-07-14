@@ -29,7 +29,7 @@ Public API
 
 def shape_cluster(
     vectors: list[ndarray] | ndarray | Events,
-    k: int | list[int],
+    k: int | list[int] = tuple(range(2, 21)),
     direction: Optional[str] = None,
     n_components: int = 10,
     metric: str = 'cosine',
@@ -60,7 +60,7 @@ def shape_cluster(
         vectors (list[ndarray] | ndarray | Events): The event vectors to cluster. Should be 2D array-like or Events
             object. If Events object, direction must be specified. Otherwise, vectors must be monophasic, but not
             required to be strictly one-sided.
-        k (int | list[int]): Number of clusters or list of cluster numbers.
+        k (int | list[int]): Number of clusters or list of cluster numbers. Default is range(2, 21).
         direction (int | None): The direction of the events. Has to be provided if vectors is an Events object, otherwise
             ignored. Default is None.
         n_components (int): Number of latent space dimensions (UMAP). Default is 10.
@@ -144,7 +144,7 @@ def shape_cluster(
 
 def augment_clusters(
     clusters: ShapeClusters,
-    n_samples: int = 1000,
+    n_vectors: Optional[int] = None,
     max_k: int = 50,
     weight: float = 1e-2,
     random_state: Optional[int] = None,
@@ -170,7 +170,8 @@ def augment_clusters(
 
     Args:
         clusters (ShapeClusters): An object containing the clustering results.
-        n_samples (int): The number of samples to generate. Default is 1000.
+        n_vectors (int | None): The number of vectors to generate. If None, one generation will occur per event in
+            ShapeClusters. Default is None.
         max_k (int): The maximum number of components to fit (scaling features). Default is 50.
         weight (float): The weight concentration prior for the Dirichlet Process (scaling features). Default is 1e-2.
         random_state (int | None): Random seed for reproducibility (scaling features only). Default is None.
@@ -192,7 +193,7 @@ def augment_clusters(
     # Augment the event vectors
     clusters = _augment_vectors(
         clusters,
-        n_samples=n_samples,
+        n_vectors=n_vectors,
         max_attempts=max_attempts,
         sample_global=sample_global,
         random_state=random_state,
@@ -311,7 +312,7 @@ def _reduce_events(
 def _cluster_latent(
     transform: ndarray,
     vectors: list[ndarray],
-    k: int | list[int],
+    k: int | list[int] = tuple(range(2, 21)),
     init_params: str = 'kmeans',
     max_iter: int = 100,
     n_init: int = 1,
@@ -324,7 +325,7 @@ def _cluster_latent(
     Args:
         transform (ndarray): The normalised and reduced event vectors to cluster. Should be 2D array-like.
         vectors (list[ndarray]): The corresponding original event vectors (not normalised). Should be 2D array-like.
-        k (int | list[int]): Number of clusters or list of cluster numbers.
+        k (int | list[int]): Number of clusters or list of cluster numbers. Default is range(2, 21).
         init_params (str): The method used to initialise the weights. Default is 'kmeans'.
         max_iter (int): Number of EM iterations. Default is 100.
         n_init (int): Number of initialisations. Default is 1.
@@ -340,7 +341,7 @@ def _cluster_latent(
     if len(transform) != len(vectors):
         raise ValueError("Transformed vectors and original vectors must have the same length.")
 
-    k_list = [k] if isinstance(k, int) else k
+    k_list = [k] if isinstance(k, int) else list(k)
     if any(k < 2 for k in k_list):
         raise ValueError("Number of clusters 'k' must be at least 2.")
 
@@ -789,7 +790,7 @@ def _fit_dp_gmm(
 
 def _augment_vectors(
     clusters: ShapeClusters,
-    n_samples: int = 1000,
+    n_vectors: Optional[int] = None,
     max_attempts: int = 100,
     sample_global: bool = True,
     random_state: Optional[int] = None,
@@ -800,7 +801,8 @@ def _augment_vectors(
 
     Args:
         clusters (ShapeClusters): An object containing the clustering results.
-        n_samples (int): The number of samples to generate. Default is 1000.
+        n_vectors (int | None): The number of vectors to generate. If None, one generation will occur per event in
+            ShapeClusters. Default is None.
         max_attempts (int): The maximum number of attempts to sample a candidate. Default is 100.
         sample_global (bool): Whether to sample from the global model or the local model. Default is True.
         random_state (int | None): Random seed for reproducibility. Default is None.
@@ -814,9 +816,11 @@ def _augment_vectors(
         raise ValueError("ShapeClusters must contain 'representative' vector, see: _representative_vectors.")
     if clusters.clusters[0].local_model is None:
         raise ValueError("ShapeClusters must contain 'local_model', see: _fit_scaling_features.")
+    if n_vectors is None:
+        n_vectors = int(sum([len(cluster.vectors) for cluster in clusters.clusters]))
 
     # Sample the model to get the associated representative vectors
-    clusters.sampled_model, clusters.sampled_labels = clusters.model.sample(n_samples)
+    clusters.sampled_model, clusters.sampled_labels = clusters.model.sample(n_vectors)
 
     # Initialise the augmentation results
     for cluster in clusters.clusters:
@@ -825,7 +829,7 @@ def _augment_vectors(
         cluster.augmented = []
 
     # Configure progress bar
-    with tqdm(total=n_samples, desc='Augmenting Clusters', miniters=maximum(1, n_samples // 100), bar_format=_BAR_FORMAT,
+    with tqdm(total=n_vectors, desc='Augmenting Clusters', miniters=maximum(1, n_vectors // 100), bar_format=_BAR_FORMAT,
               disable=not verbose) as progress:
         for label in clusters.sampled_labels:
             # Get a sample using the local and global models

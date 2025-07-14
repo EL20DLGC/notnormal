@@ -6,7 +6,7 @@ from typing import Optional, Any
 from numpy.random import default_rng
 from tqdm import tqdm
 from numpy import unique, logspace, log, e, pi, abs, sum, clip, max, min, argmin, concatenate, linspace, ndarray, ceil, \
-    log2, sqrt, cumsum, diff, mean, exp, inf, arccos, asarray, interp, full
+    log2, sqrt, cumsum, diff, mean, exp, inf, arccos, asarray, interp, full, r_
 from numpy.fft import fft, ifft, fftfreq
 from scipy.integrate import simpson
 from scipy.signal import freqs, bessel, firwin2, oaconvolve
@@ -26,9 +26,9 @@ Public API
 def reconstruct_noise(
     trace: ndarray | Trace,
     event_mask: ndarray | Events,
-    n_regimes: int | list[int],
     aa_cutoff: int,
     aa_order: int,
+    n_regimes: int | list[int] = (2, 3),
     sample_rate: Optional[int] = None,
     maxiter: tuple[int, int] = (2000, 10000),
     popsize: int = 500,
@@ -57,7 +57,7 @@ def reconstruct_noise(
     Args:
         trace (ndarray | Trace): The trace to be processed or a Trace object. If ndarray, the sample rate must be provided.
         event_mask (ndarray | Events): A boolean mask indicating the events in the trace or an Events object.
-        n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit.
+        n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit. Default is [2, 3].
         aa_order (int): The order of the anti-aliasing filter.
         aa_cutoff (int): The cutoff frequency for the anti-aliasing filter.
         sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
@@ -99,9 +99,9 @@ def reconstruct_noise(
     fits = fit_noise(
         f,
         pxx,
-        n_regimes,
         aa_order,
         aa_cutoff,
+        n_regimes=n_regimes,
         maxiter=maxiter,
         popsize=popsize,
         mutation=mutation,
@@ -140,9 +140,9 @@ def reconstruct_noise(
 def fit_noise(
     f: ndarray,
     pxx: ndarray,
-    n_regimes: int | list[int],
     aa_order: int,
     aa_cutoff: int,
+    n_regimes: int | list[int] = (2, 3),
     maxiter: tuple[int, int] = (2000, 10000),
     popsize: int = 500,
     mutation: tuple[float, float] = (0.7, 1.2),
@@ -157,9 +157,9 @@ def fit_noise(
     Args:
         f (ndarray): The frequency array of the true noise.
         pxx (ndarray): The PSD array of the true noise.
-        n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit.
         aa_order (int): The order of the anti-aliasing filter.
         aa_cutoff (int): The cutoff frequency for the anti-aliasing filter.
+        n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit. Default is (2, 3).
         maxiter (tuple[int, int]): The maximum number evaluations for differential evolution and L-BFGS-B. Default is (2000, 10000).
         popsize (int): The population size multiplier for differential evolution. Default is 500.
         mutation (tuple[float, float]): The mutation constant for differential evolution. Default is (0.7, 1.2).
@@ -173,7 +173,7 @@ def fit_noise(
     if len(f) != len(pxx):
         raise ValueError("Frequency and PSD arrays must have the same length.")
 
-    n_list = [n_regimes] if isinstance(n_regimes, int) else n_regimes
+    n_list = [n_regimes] if isinstance(n_regimes, int) else list(n_regimes)
     if any(n < 1 for n in n_list):
         raise ValueError("Number of regimes must be at least 1.")
 
@@ -241,7 +241,7 @@ def fit_noise(
     return results
 
 
-def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> dict[int, dict[str, Any]]:
+def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int] = (2, 3)) -> dict[int, dict[str, Any]]:
     """
     Fit piecewise linear noise regimes to the provided power spectral density (PSD) using Nelder-Mead optimisation.
     The fitting is done by minimising the mean squared error between the predicted and actual PSDs. This function
@@ -252,7 +252,7 @@ def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> 
     Args:
         f (ndarray): The frequency array of the true noise.
         pxx (ndarray): The PSD array of the true noise.
-        n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit.
+        n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit. Default is (2, 3).
 
     Returns:
         dict[int, dict[str, Any]]: A dictionary of noise fitting results keyed by the number of regimes.
@@ -261,17 +261,17 @@ def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> 
     if len(f) != len(pxx):
         raise ValueError("Frequency and PSD arrays must have the same length.")
 
-    n_list = [n_regimes] if isinstance(n_regimes, int) else n_regimes
+    n_list = [n_regimes] if isinstance(n_regimes, int) else list(n_regimes)
     if any(n < 1 for n in n_list):
         raise ValueError("Number of regimes must be at least 1.")
 
     # Log transform for straight line fitting
-    f  = log(f)
+    f = log(f)
     pxx = log(pxx)
 
     # Objective function for piecewise linear fit
     def objective(prediction, x, y, n):
-        px = concatenate((x[0], prediction[:n - 1], x[len(x) - 1]))
+        px = r_[x[0], prediction[:n - 1], x[len(x) - 1]]
         py = prediction[n - 1:]
         return mean((y - interp(x , px, py)) ** 2)
 
@@ -280,7 +280,7 @@ def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> 
         # Create initial guess as n equally spaced points in the frequency domain (with first and last points fixed)
         init_f = min(f) + cumsum(full(n - 1, ((max(f) - min(f)) / n)))
         init_idx = [argmin(abs(f - val)) for val in init_f]
-        initial_guess = concatenate((f[init_idx], concatenate((pxx[0], pxx[init_idx], pxx[len(pxx) - 1]))))
+        initial_guess = r_[f[init_idx], r_[pxx[0], pxx[init_idx], pxx[len(pxx) - 1]]]
 
         # Nelder-Mead optimization
         result = minimize(objective, initial_guess, args=(f, pxx, n), method='Nelder-Mead')
@@ -289,10 +289,10 @@ def piecwise_fit_noise(f: ndarray, pxx: ndarray, n_regimes: int | list[int]) -> 
         fits[n] = {}
         fits[n]['f'] = f
         fits[n]['pxx'] = pxx
-        fits[n]['line fit'] = exp(interp(f, concatenate((f[0], result.x[:n - 1], f[len(f) - 1])), result.x[n - 1:]))
+        fits[n]['line fit'] = exp(interp(f, r_[f[0], result.x[:n - 1], f[len(f) - 1]], result.x[n - 1:]))
         fits[n]['n_regimes'] = n
         fits[n]['crossovers'] = exp(result.x[:n - 1])
-        fits[n]['ms'] = -(diff(result.x[n - 1:]) / diff(concatenate((f[0], result.x[:n - 1], f[len(f) - 1]))))
+        fits[n]['ms'] = -(diff(result.x[n - 1:]) / diff(r_[f[0], result.x[:n - 1], f[len(f) - 1]]))
         fits[n]['alphas'] = [(m + 1.0) / 2.0 for m in fits[n]['ms']],
         fits[n]['MSE'] = result.fun
         fits[n]['success'] = result.success
@@ -459,7 +459,7 @@ def _generate_noises(
     if n_regimes is None:
         n_list = noise_dict.keys()
     else:
-        n_list = [n_regimes] if isinstance(n_regimes, int) else n_regimes
+        n_list = [n_regimes] if isinstance(n_regimes, int) else list(n_regimes)
         if any(n not in noise_dict.keys() for n in n_list):
             raise ValueError(f"Some of the requested regime numbers {n_list} are not present in the noise dictionaries.")
 
