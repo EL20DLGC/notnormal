@@ -722,7 +722,7 @@ class ShapeClusters:
         return self.clusters[cluster_id].vectors if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def get_representative(self, cluster_id: Optional[int] = None) -> ndarray:
+    def get_representative(self, cluster_id: Optional[int] = None) -> list[ndarray]:
         """
         Get representative vectors for all clusters or a specific cluster.
 
@@ -734,12 +734,12 @@ class ShapeClusters:
         """
 
         if cluster_id is None:
-            return ndarray([cluster.representative for cluster in self.clusters if cluster.representative is not None])
+            return [cluster.representative for cluster in self.clusters if cluster.representative is not None]
 
-        return self.clusters[cluster_id].representative if 0 <= cluster_id < len(self.clusters) else ndarray([])
+        return self.clusters[cluster_id].representative if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def get_normalised(self, cluster_id: Optional[int] = None) -> ndarray:
+    def get_normalised(self, cluster_id: Optional[int] = None) -> list[ndarray]:
         """
         Get the locally normalised event vectors for all clusters or a specific cluster.
 
@@ -751,9 +751,9 @@ class ShapeClusters:
         """
 
         if cluster_id is None:
-            return ndarray([norm for cluster in self.clusters for norm in cluster.normalised if cluster.normalised is not None])
+            return [norm for cluster in self.clusters for norm in cluster.normalised if cluster.normalised is not None]
 
-        return self.clusters[cluster_id].normalised if 0 <= cluster_id < len(self.clusters) else ndarray([])
+        return self.clusters[cluster_id].normalised if 0 <= cluster_id < len(self.clusters) else []
 
 
     def get_reconstructed(self, cluster_id: Optional[int] = None) -> list[ndarray]:
