@@ -7,7 +7,7 @@ from typing import Any, Optional, Callable
 from dataclasses import dataclass, field, asdict
 from collections.abc import Iterator
 from warnings import warn
-from numpy import ndarray, arange, sum
+from numpy import ndarray, arange, sum, asarray
 import cython
 
 _COMPILED = cython.compiled
@@ -47,6 +47,11 @@ class Trace:
         """
         Populate the Trace object with values if not provided.
         """
+
+        # Ensure safety
+        self.trace = asarray(self.trace, dtype=float)
+        if (not self.trace.flags['C_CONTIGUOUS']) or (not self.trace.flags['OWNDATA']):
+            self.trace = self.trace.copy(order='C')
 
         if self.time_step is None:
             self.time_step = 1 / self.sample_rate
@@ -705,7 +710,7 @@ class ShapeClusters:
     aug_distributional_loss: Optional[dict[str, float]] = None
 
 
-    def get_vectors(self, cluster_id: Optional[int] = None) -> list[ndarray]:
+    def get_vectors(self, cluster_id: Optional[int] = None) -> list[ndarray] | ndarray:
         """
         Get the event vectors for all clusters or a specific cluster.
 
@@ -713,7 +718,7 @@ class ShapeClusters:
             cluster_id (int | None): The ID of a specific cluster. Default is None.
 
         Returns:
-            list[ndarray]: A list of event vectors for all clusters or the specified cluster.
+            list[ndarray] | ndarray: A list of event vectors for all clusters or the specified cluster.
         """
 
         if cluster_id is None:
@@ -722,7 +727,7 @@ class ShapeClusters:
         return self.clusters[cluster_id].vectors if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def get_representative(self, cluster_id: Optional[int] = None) -> list[ndarray]:
+    def get_representative(self, cluster_id: Optional[int] = None) -> list[ndarray] | ndarray:
         """
         Get representative vectors for all clusters or a specific cluster.
 
@@ -730,7 +735,7 @@ class ShapeClusters:
             cluster_id (int | None): The ID of a specific cluster. Default is None.
 
         Returns:
-            ndarray: All representative vectors or only for the specified cluster.
+            list[ndarray] | ndarray: All representative vectors or only for the specified cluster.
         """
 
         if cluster_id is None:
@@ -739,7 +744,7 @@ class ShapeClusters:
         return self.clusters[cluster_id].representative if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def get_normalised(self, cluster_id: Optional[int] = None) -> list[ndarray]:
+    def get_normalised(self, cluster_id: Optional[int] = None) -> list[ndarray] | ndarray:
         """
         Get the locally normalised event vectors for all clusters or a specific cluster.
 
@@ -747,7 +752,7 @@ class ShapeClusters:
             cluster_id (int | None): The ID of a specific cluster. Default is None.
 
         Returns:
-            ndarray: An array of locally normalised event vectors for all clusters or the specified cluster.
+            list[ndarray] | ndarray: An array of locally normalised event vectors for all clusters or the specified cluster.
         """
 
         if cluster_id is None:
@@ -756,7 +761,7 @@ class ShapeClusters:
         return self.clusters[cluster_id].normalised if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def get_reconstructed(self, cluster_id: Optional[int] = None) -> list[ndarray]:
+    def get_reconstructed(self, cluster_id: Optional[int] = None) -> list[ndarray] | ndarray:
         """
         Get the reconstructed event vectors for all clusters or a specific cluster.
 
@@ -764,7 +769,7 @@ class ShapeClusters:
             cluster_id (int | None): The ID of a specific cluster. Default is None.
 
         Returns:
-            list[ndarray]: A list of reconstructed event vectors for all clusters or the specified cluster.
+            list[ndarray] | ndarray: A list of reconstructed event vectors for all clusters or the specified cluster.
         """
 
         if cluster_id is None:
@@ -773,7 +778,7 @@ class ShapeClusters:
         return self.clusters[cluster_id].reconstructed if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def get_augmented(self, cluster_id: Optional[int] = None) -> list[ndarray]:
+    def get_augmented(self, cluster_id: Optional[int] = None) -> list[ndarray] | ndarray:
         """
         Get the augmented event vectors for all clusters or a specific cluster.
 
@@ -781,7 +786,7 @@ class ShapeClusters:
             cluster_id (int | None): The ID of a specific cluster. Default is None.
 
         Returns:
-            list[ndarray]: A list of augmented event vectors for all clusters or the specified cluster.
+            list[ndarray] | ndarray: A list of augmented event vectors for all clusters or the specified cluster.
         """
 
         if cluster_id is None:

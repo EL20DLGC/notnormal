@@ -562,7 +562,7 @@ def _bounds_filter(trace: ndarray | Trace, window: cython.int) -> ndarray:
     if isinstance(trace, Trace):
         trace = trace.trace
 
-    return median_filter(trace, window) if window else trace
+    return median_filter(trace, window) if window else asarray(trace).copy(order="C")
 
 
 def _validate_input(
@@ -583,7 +583,7 @@ def _validate_input(
     and iterate.
     """
 
-    #  Do not validate
+    # Do not validate
     if not _validate:
         # Arguments for _baseline_threshold and _locate_replace
         bl_args = {'cutoff': cutoff, 'sample_rate': sample_rate, 'z_score': z_score,
@@ -599,9 +599,19 @@ def _validate_input(
     if sample_rate is None:
         raise ValueError("Sample rate must be provided if trace is a ndarray.")
 
+    # Ensure safety
+    trace = asarray(trace)
+    if (not trace.flags['C_CONTIGUOUS']) or (not trace.flags['OWNDATA']):
+        trace = trace.copy(order='C')
+
     # Use the normal trace if no bounding trace is supplied
     if filtered_trace is None:
         filtered_trace = trace
+
+    # Ensure safety
+    filtered_trace = asarray(filtered_trace)
+    if (not filtered_trace.flags['C_CONTIGUOUS']) or (not filtered_trace.flags['OWNDATA']):
+        filtered_trace = filtered_trace.copy(order='C')
 
     # Default to 1 expected outlier per trace (computed on length, of course)
     if z_score is None:

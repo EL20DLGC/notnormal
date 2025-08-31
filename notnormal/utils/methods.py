@@ -60,10 +60,15 @@ def load_trace(path: str, label: Optional[str] = None) -> Trace:
     if len(time_vector) < 2:
         raise ValueError("Trace must have at least two time points.")
 
+    # Ensure safety
+    trace = asarray(trace, dtype=float)
+    if (not trace.flags['C_CONTIGUOUS']) or (not trace.flags['OWNDATA']):
+        trace = trace.copy(order='C')
+
     # Convert to Trace obj
     trace = Trace(
         label=label if label else path_obj.stem,
-        trace=asarray(trace, dtype=float),
+        trace=trace,
         sample_rate=int(round(1.0 / (time_vector[1] - time_vector[0]))),
         units=units
     )
