@@ -1,3 +1,6 @@
+# Copyright (C) 2025 Dylan Charnock <el20dlgc@leeds.ac.uk>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 This module provides functions for anomaly detection and baseline determination in (nano)electrochemical time series
 data.

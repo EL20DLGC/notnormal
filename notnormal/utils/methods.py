@@ -1,3 +1,6 @@
+# Copyright (C) 2025 Dylan Charnock <el20dlgc@leeds.ac.uk>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 This module provides utility functions for (nano)electrochemical time series data.
 """

@@ -1,3 +1,6 @@
+# Copyright (C) 2025 Dylan Charnock <el20dlgc@leeds.ac.uk>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 This module provides functions to simulate traces with noise, baseline, and events for (nano)electrochemical time series
 data. WARNING: This module will be deprecated on conclusion of my PhD, it is a rather basic implementation but offers

@@ -2,7 +2,7 @@
  <img src="notnormal/data/logo.png" alt="Logo" width="300"/>
 </p>
 
-This package revolves around the **NotNormal** algorithm, which combines estimation and iteration to automatically extract events from (nano)electrochemical time series data.  The [*notnormal*](notnormal/docs/index.html) package includes the [*extract*](notnormal/docs/notnormal/extract.html), *gui*, [*filter*](notnormal/docs/notnormal/filter.html), [*simulate*](notnormal/docs/notnormal/simulate.html), [*reconstruct*](notnormal/docs/notnormal/reconstruct.html), [*utils*](notnormal/docs/notnormal/utils.html), and [*models*](notnormal/docs/notnormal/models.html) packages:
+This package revolves around the **NotNormal** algorithm, which combines estimation and iteration to automatically extract events from (nano)electrochemical time-series data.  The [*notnormal*](notnormal/docs/index.html) package includes the [*extract*](notnormal/docs/notnormal/extract.html), *gui*, [*filter*](notnormal/docs/notnormal/filter.html), [*simulate*](notnormal/docs/notnormal/simulate.html), [*reconstruct*](notnormal/docs/notnormal/reconstruct.html), [*utils*](notnormal/docs/notnormal/utils.html), and [*models*](notnormal/docs/notnormal/models.html) packages:
 
 -  [*extract*](notnormal/docs/notnormal/extract.html): functional form of the NotNormal algorithm, to be used within preexisting code or without the use of the GUI. 
 

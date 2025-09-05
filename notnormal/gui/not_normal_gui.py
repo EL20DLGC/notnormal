@@ -1,3 +1,6 @@
+# Copyright (C) 2025 Dylan Charnock <el20dlgc@leeds.ac.uk>
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """
 This module is the GUI for the NotNormal algorithm. It is inefficient, has bugs, but it works and is functional.
 In the future, it will be replaced with a more efficient and better designed GUI
