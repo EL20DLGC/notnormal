@@ -1,1 +1,5 @@
 * text=auto eol=lf
+*.html linguist-documentation
+*.css linguist-documentation
+*.md  linguist-documentation
+*.js  linguist-documentation
