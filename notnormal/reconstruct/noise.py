@@ -31,8 +31,8 @@ def reconstruct_noise(
     n_regimes: int | list[int] = (2, 3),
     sample_rate: Optional[int] = None,
     maxiter: tuple[int, int] = (2000, 10000),
-    popsize: int = 500,
     mutation: tuple[float, float] = (0.7, 1.2),
+    popsize: Optional[int] = None,
     psd_period: Optional[float] = None,
     nfft: Optional[int] = None,
     generate: str | bool = 'best',
@@ -62,8 +62,9 @@ def reconstruct_noise(
         aa_cutoff (int): The cutoff frequency for the anti-aliasing filter.
         sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
         maxiter (tuple[int, int]): The maximum number evaluations for differential evolution and L-BFGS-B. Default is (2000, 10000).
-        popsize (int): The population size multiplier for differential evolution. Default is 500.
         mutation (tuple[float, float]): The mutation constant for differential evolution. Default is (0.7, 1.2).
+        popsize (int | None): The population size multiplier for differential evolution. If None, equates to number of
+            parameters * 50. Default is None.
         psd_period (float | None): The period for the PSD calculation. Default is None.
         nfft (int | None): The length of FFT to use for PSD calculation. Default is None.
         generate (str | bool): Whether to generate noise regimes. If 'Best', only the best fit is generated. Default is 'best'.
@@ -144,8 +145,8 @@ def fit_noise(
     aa_cutoff: int,
     n_regimes: int | list[int] = (2, 3),
     maxiter: tuple[int, int] = (2000, 10000),
-    popsize: int = 500,
     mutation: tuple[float, float] = (0.7, 1.2),
+    popsize: Optional[int] = None,
     random_state: Optional[int] = None,
     verbose: bool = False
 ) -> dict[int, NoiseFitResults]:
@@ -161,8 +162,9 @@ def fit_noise(
         aa_cutoff (int): The cutoff frequency for the anti-aliasing filter.
         n_regimes (int | list[int]): The number of noise regimes to fit or a list of noise regime numbers to fit. Default is (2, 3).
         maxiter (tuple[int, int]): The maximum number evaluations for differential evolution and L-BFGS-B. Default is (2000, 10000).
-        popsize (int): The population size multiplier for differential evolution. Default is 500.
         mutation (tuple[float, float]): The mutation constant for differential evolution. Default is (0.7, 1.2).
+        popsize (int | None): The population size multiplier for differential evolution. If None, equates to number of
+            parameters * 50. Default is None.
         random_state (int | None): Random seed for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
@@ -180,20 +182,23 @@ def fit_noise(
     # Configure progress bar
     with tqdm(total=len(n_list), desc='Fitting Noise', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
         results = {}
+
+        # Get logarithmic indices to reduce the number of points for fitting and bias towards lower frequencies
+        log_indices = unique(logspace(0, log(len(f)), num=len(f), dtype=int, base=e) - 1)
+        f = f[log_indices]
+        pxx = pxx[log_indices]
+
+        # Bessel power response for AA filter shaping
+        _, h_filter = freqs(*bessel(aa_order, aa_cutoff * 2 * pi, analog=True, norm='mag', output='ba'),
+                            worN=f * 2 * pi)
+        p_filter = abs(h_filter) ** 2
+
+        # Get the maximum possible C value 10 * (highest density, lowest frequency and highest exponent)
+        c_max = log(100.0 * max(pxx) * f[0] ** 2.0)
+        # Get the minimum possible C value 0.1 * (lowest density, highest frequency and lowest exponent)
+        c_min = log(0.01 * min(pxx) * f[f.shape[0] - 1] ** -2.0)
+
         for n in n_list:
-            # Get logarithmic indices to reduce the number of points for fitting and bias towards lower frequencies
-            log_indices = unique(logspace(0, log(len(f)), num=len(f), dtype=int, base=e) - 1)
-            f = f[log_indices]
-            pxx = pxx[log_indices]
-
-            # Bessel power response for AA filter shaping
-            _, h_filter = freqs(*bessel(aa_order, aa_cutoff * 2 * pi, analog=True, norm='mag', output='ba'), worN=f * 2 * pi)
-            p_filter = abs(h_filter) ** 2
-
-            # Get the maximum possible C value 10 * (highest density, lowest frequency and highest exponent)
-            c_max = log(100.0 * max(pxx) * f[0] ** 2)
-            # Get the minimum possible C value 0.1 * (lowest density, highest frequency and lowest exponent)
-            c_min = log(0.01 * min(pxx) * f[f.shape[0] - 1] ** -2)
             # [-2, 2] bounds to cover expected range of exponents, log(c_i) to improve numerical stability
             bounds = [(c_min, c_max)] * n + [(-2.0, 2.0)] * n
 
@@ -204,10 +209,13 @@ def fit_noise(
                 args=(f, pxx, p_filter),
                 strategy='randtobest1bin',
                 maxiter=maxiter[0],
-                popsize=popsize,
+                popsize=popsize if popsize else len(bounds) * 50,
                 mutation=mutation,
                 tol=1e-4,
-                seed=random_state
+                seed=random_state,
+                workers=-1,
+                updating='deferred',
+                polish=False
             )
 
             # Perform local optimization
@@ -217,7 +225,7 @@ def fit_noise(
                 args=(f, pxx, p_filter),
                 bounds=bounds,
                 method='L-BFGS-B',
-                options={'maxiter': maxiter[1], 'ftol': 1e-10}
+                options={'maxiter': maxiter[1], 'ftol': 1e-12, 'gtol': 1e-10, 'eps': 1e-12}
             )
 
             # Store results
@@ -383,8 +391,9 @@ def _objective(params: ndarray, f: ndarray, pxx: ndarray, p_filter: ndarray) -> 
     """
 
     # Extract the exponents (m_i) and logarithm of the numerators (c_i) from the parameters
-    ms = params[len(params) // 2:]
-    cs = params[:len(params) // 2]
+    n = params.shape[0] // 2
+    ms = params[n:]
+    cs = params[:n]
 
     # Define the model function: pxx = sum(c_i / f ^ m_i), e^(c_i) to reverse previous log, filter by p_filter
     pxx_pred = sum(exp(cs[:, None]) / f[None, :] ** ms[:, None], axis=0) * p_filter
