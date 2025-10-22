@@ -84,8 +84,13 @@ class FeatureWindow(tk.Toplevel):
         super().__init__(master)
         self.master = master
         self.events = events
+        # Destroy protocol
+        self.protocol('WM_DELETE_WINDOW', self.hide)
+        self.master.bind('<Destroy>', lambda e: self.destroy() if e.widget is self.master else None, add='+')
         # Loose focus pls
+        self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
         self.attributes('-topmost', 1)
+        self.after_idle(lambda: self.attributes('-topmost', False))
         # Title
         self.title("Feature Window")
         # Background
@@ -202,7 +207,33 @@ class FeatureWindow(tk.Toplevel):
                     "Outlier": {"label": "Show Outliers", "relim": False, "type": "bool", "onvalue": "all", "default": False},
                     "Direction": {"label": "Direction", "relim": False, "type": "str", "values": ["up", "down", "all"], "default": "all"},
                 }
-            }
+            },
+            {
+                "label": "Event Plot",
+                "function": "plot",
+                "sub_plot_init": {"projection": None},
+                "axis_init": {},
+                "axis_func_init": {
+                    "grid": {"visible": True},
+                },
+                "plot_init": {"zorder": 2},
+                "axis_options": {},
+                "axis_func_options": {
+                    "grid": {"label": "Grid", "relim": False, "type": "bool", "default": True, "kwargs": {}},
+                },
+                "plot_options": {
+                    "linewidth": {"label": "Linewidth", "relim": False, "type": "float", "values": [0, 5, 0.5],
+                                   "default": 1},
+                    "alpha": {"label": "Alpha", "relim": False, "type": "float", "values": [0, 1, 0.05], "default": 1},
+                    "color": {"label": "Colour", "relim": False, "type": "colour", "default": master.colours["trace"]},
+                },
+                "feature_filters": {
+                    "Outlier": {"label": "Show Outliers", "relim": False, "type": "bool", "onvalue": "all",
+                                "default": False},
+                    "Direction": {"label": "Direction", "relim": False, "type": "str", "values": ["up", "down", "all"],
+                                  "default": "all"},
+                }
+            },
         ]
 
         # Create layout
@@ -440,6 +471,10 @@ class FeatureWindow(tk.Toplevel):
         # Bind events
         widgets['canvas'].mpl_connect("pick_event", self.pick_event)
 
+    def update_events(self, events):
+        self.events = events
+        self.update_all_figures(relim=True)
+
     def update_colour(self, figure_config: dict, option: str):
         label = figure_config['label']
         plot_options = self.plot_options[label]
@@ -488,8 +523,14 @@ class FeatureWindow(tk.Toplevel):
                 else:
                     options[option] = self.plot_options[label][option].get()
 
+            # Event plot is a special case
+            if label == 'Event Plot':
+                vecs = self.events.get_feature('Vector', event_ids)
+                options['_series'] = [item for pair in ((range(len(y)), y) for y in vecs) for item in pair]
+                current_features.append('Vector')
+
             # Plot
-            plot = getattr(ax, function)(**options, **plot_init, picker=True)
+            plot = getattr(ax, function)(*options.pop('_series', []), **options, **plot_init, picker=True)
 
             # Get axis options
             options = dict()
@@ -690,6 +731,21 @@ class FeatureWindow(tk.Toplevel):
         self.current_figure = None
         self.set_current_figure()
 
+    def hide(self):
+        try:
+            self.attributes('-topmost', False)
+        except Exception:
+            pass
+        self.withdraw()
+
+    def show(self):
+        self.deiconify()
+        self.lift()
+        try:
+            self.attributes('-topmost', True)
+        except Exception:
+            pass
+
     @staticmethod
     def parse_figure_config(figure_config: dict):
         # Label
@@ -846,6 +902,8 @@ class NotNormalGUI(tk.Tk):
 
         # Loose focus pls
         self.bind("<FocusOut>", lambda event: self.wm_attributes('-topmost', 0))
+        self.attributes('-topmost', True)
+        self.after_idle(lambda: self.attributes('-topmost', False))
         # Title
         self.title("Not Normal")
         self.tk.call('tk', 'appname', 'NotNormal')
@@ -1067,12 +1125,14 @@ class NotNormalGUI(tk.Tk):
         tooltip.Hovertip(self.widgets['results']['save'], "Ctrl + S", hover_delay=300)
         tooltip.Hovertip(self.widgets['analysis_view']['options_toggle'], "O", hover_delay=300)
         tooltip.Hovertip(self.widgets['analyse']['bounds_input'],
-                         "Median filtering window size for bounding events", hover_delay=300)
+                         "Median filtering window size for bounding events (estimate and iterate)", hover_delay=300)
         tooltip.Hovertip(self.widgets['analyse']['estimate_cutoff_input'], 'Cutoff frequency for the estimate',
                          hover_delay=300)
         tooltip.Hovertip(self.widgets['analyse']['threshold_window_input'], 'Window size for threshold calculation'
                                                                             ' (estimate and iterate)', hover_delay=300)
         tooltip.Hovertip(self.widgets['analyse']['z_score_input'], 'Z-score for threshold (estimate and iterate)',
+                         hover_delay=300)
+        tooltip.Hovertip(self.widgets['analyse']['features_input'], 'Feature extraction type (estimate and iterate)',
                          hover_delay=300)
         tooltip.Hovertip(self.widgets['analyse']['cutoff_input'], 'Cutoff frequency for the iteration',
                          hover_delay=300)
@@ -1336,6 +1396,21 @@ class NotNormalGUI(tk.Tk):
         )
         self.default_analysis_options['z_score'] = self.analysis_options['z_score'].get()
         self.widgets['analyse']['z_score_input'].configure(font=self.fonts['small'])
+        self.widgets['analyse']['z_score_separator'] = ttk.Separator(self.windows['analyse_internal'])
+        # Feature input
+        self.analysis_options['features'] = tk.StringVar()
+        self.analysis_options['features'].set('full')
+        self.widgets['analyse']['features_label'] = ttk.Label(self.windows['analyse_internal'], text="Output Features")
+        self.widgets['analyse']['features_input'] = ttk.Combobox(
+            self.windows['analyse_internal'],
+            values=['full', 'FWHM', 'FWQM'],
+            textvariable=self.analysis_options['features'],
+            state='readonly',
+            width=_ENTRY_WIDTH,
+            justify='center'
+        )
+        self.default_analysis_options['features'] = self.analysis_options['features'].get()
+        self.widgets['analyse']['features_input'].configure(font=self.fonts['small'])
         # Estimate button
         self.widgets['analyse']['estimate'] = ttk.Button(
             self.windows['analyse_internal'],
@@ -1441,29 +1516,34 @@ class NotNormalGUI(tk.Tk):
         self.windows['analyse_internal'].rowconfigure(6, weight=1)
         self.widgets['analyse']['z_score_label'].grid(row=6, column=0, sticky="nsew", padx=_PADDING)
         self.widgets['analyse']['z_score_input'].grid(row=6, column=1, sticky="e", padx=_PADDING)
-        # Estimate button layout
-        self.widgets['analyse']['estimate'].grid(row=7, column=0, columnspan=2, sticky="nsew", padx=_PADDING)
-        # Cutoff layout
+        self.widgets['analyse']['z_score_separator'].grid(row=7, column=0, columnspan=2, sticky="nsew")
+        # Features layout
         self.windows['analyse_internal'].rowconfigure(8, weight=1)
-        self.widgets['analyse']['cutoff_label'].grid(row=8, column=0, sticky="nsew", padx=_PADDING)
-        self.widgets['analyse']['cutoff_input'].grid(row=8, column=1, sticky="e", padx=_PADDING)
-        self.widgets['analyse']['cutoff_separator'].grid(row=9, column=0, columnspan=2, sticky="nsew")
-        # Starting direction layout
+        self.widgets['analyse']['features_label'].grid(row=8, column=0, sticky="nsew", padx=_PADDING)
+        self.widgets['analyse']['features_input'].grid(row=8, column=1, sticky="e", padx=_PADDING)
+        # Estimate button layout
+        self.widgets['analyse']['estimate'].grid(row=9, column=0, columnspan=2, sticky="nsew", padx=_PADDING)
+        # Cutoff layout
         self.windows['analyse_internal'].rowconfigure(10, weight=1)
-        self.widgets['analyse']['event_direction_label'].grid(row=10, column=0, sticky="nsew", padx=_PADDING)
-        self.widgets['analyse']['event_direction_input'].grid(row=10, column=1, sticky="e", padx=_PADDING)
-        self.widgets['analyse']['event_direction_separator'].grid(row=11, column=0, columnspan=2, sticky="nsew")
-        # Replace factor layout
+        self.widgets['analyse']['cutoff_label'].grid(row=10, column=0, sticky="nsew", padx=_PADDING)
+        self.widgets['analyse']['cutoff_input'].grid(row=10, column=1, sticky="e", padx=_PADDING)
+        self.widgets['analyse']['cutoff_separator'].grid(row=11, column=0, columnspan=2, sticky="nsew")
+        # Starting direction layout
         self.windows['analyse_internal'].rowconfigure(12, weight=1)
-        self.widgets['analyse']['replace_factor_label'].grid(row=12, column=0, sticky="nsew", padx=_PADDING)
-        self.widgets['analyse']['replace_factor_input'].grid(row=12, column=1, sticky="e", padx=_PADDING)
-        self.widgets['analyse']['replace_factor_separator'].grid(row=13, column=0, columnspan=2, sticky="nsew")
-        # Replace gap layout
+        self.widgets['analyse']['event_direction_label'].grid(row=12, column=0, sticky="nsew", padx=_PADDING)
+        self.widgets['analyse']['event_direction_input'].grid(row=12, column=1, sticky="e", padx=_PADDING)
+        self.widgets['analyse']['event_direction_separator'].grid(row=13, column=0, columnspan=2, sticky="nsew")
+        # Replace factor layout
         self.windows['analyse_internal'].rowconfigure(14, weight=1)
-        self.widgets['analyse']['replace_gap_label'].grid(row=14, column=0, sticky="nsew", padx=_PADDING)
-        self.widgets['analyse']['replace_gap_input'].grid(row=14, column=1, sticky="e", padx=_PADDING)
+        self.widgets['analyse']['replace_factor_label'].grid(row=14, column=0, sticky="nsew", padx=_PADDING)
+        self.widgets['analyse']['replace_factor_input'].grid(row=14, column=1, sticky="e", padx=_PADDING)
+        self.widgets['analyse']['replace_factor_separator'].grid(row=15, column=0, columnspan=2, sticky="nsew")
+        # Replace gap layout
+        self.windows['analyse_internal'].rowconfigure(16, weight=1)
+        self.widgets['analyse']['replace_gap_label'].grid(row=16, column=0, sticky="nsew", padx=_PADDING)
+        self.widgets['analyse']['replace_gap_input'].grid(row=16, column=1, sticky="e", padx=_PADDING)
         # Iterate button layout
-        self.widgets['analyse']['iterate'].grid(row=15, column=0, columnspan=2, sticky="nsew", pady=(0, _PADDING),
+        self.widgets['analyse']['iterate'].grid(row=17, column=0, columnspan=2, sticky="nsew", pady=(0, _PADDING),
                                                 padx=_PADDING)
 
     def init_analysis_view(self):
@@ -1842,6 +1922,9 @@ class NotNormalGUI(tk.Tk):
         self.event_coordinates = None
         # Clear the results
         self.analysis_results = dict()
+        # Destroy feature window
+        if self.widgets['results']['feature_window']:
+            self.widgets['results']['feature_window'].destroy()
         # Update the results
         self.update_results()
         # Update the figure
@@ -2129,9 +2212,10 @@ class NotNormalGUI(tk.Tk):
                 widget.destroy()
         for tab in tabs:
             self.widgets['results']['notebook'].add(tab[0], text=tab[1])
+
         # Feature window
-        if self.widgets['results']['feature_window']:
-            self.widgets['results']['feature_window'].destroy()
+        if self.widgets['results']['feature_window'] and self.widgets['results']['feature_window'].winfo_exists():
+            self.widgets['results']['feature_window'].update_events(self.analysis_results[self.last_called].events)
 
         # Set the last called tab
         if self.widgets['results']['notebook'].tabs():
@@ -2261,10 +2345,12 @@ class NotNormalGUI(tk.Tk):
         if text == 'Iteration':
             text = 'Final'
 
-        if self.widgets['results']['feature_window']:
-            self.widgets['results']['feature_window'].destroy()
+        if self.widgets['results']['feature_window'] and self.widgets['results']['feature_window'].winfo_exists():
+            self.widgets['results']['feature_window'].update_events(self.analysis_results[text].events)
+        else:
+            self.widgets['results']['feature_window'] = FeatureWindow(self, self.analysis_results[text].events)
+        self.widgets['results']['feature_window'].show()
 
-        self.widgets['results']['feature_window'] = FeatureWindow(self, self.analysis_results[text].events)
         self.flags['feature_win'] = False
 
     def create_tab(self, results, title):
@@ -2969,6 +3055,7 @@ class NotNormalGUI(tk.Tk):
                 self.analysis_options['replace_gap'].get(),
                 self.analysis_options['threshold_window'].get(),
                 self.analysis_options['z_score'].get(),
+                self.analysis_options['features'].get()
             ),
             daemon=True
         )
@@ -3016,7 +3103,8 @@ class NotNormalGUI(tk.Tk):
                 self.analysis_options['replace_factor'].get(),
                 self.analysis_options['replace_gap'].get(),
                 self.analysis_options['threshold_window'].get(),
-                self.analysis_options['z_score'].get()
+                self.analysis_options['z_score'].get(),
+                self.analysis_options['features'].get()
             ),
             daemon=True
         )
