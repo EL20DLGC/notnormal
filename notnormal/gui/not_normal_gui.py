@@ -212,7 +212,7 @@ class FeatureWindow(tk.Toplevel):
                 "label": "Event Plot",
                 "function": "plot",
                 "sub_plot_init": {"projection": None},
-                "axis_init": {},
+                "axis_init": {'xlabel': None, 'ylabel': None},
                 "axis_func_init": {
                     "grid": {"visible": True},
                 },
