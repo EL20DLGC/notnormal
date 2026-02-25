@@ -31,8 +31,8 @@ Public API
 """
 
 def shape_cluster(
-    vectors: list[ndarray] | ndarray | Events,
-    k: int | list[int] = tuple(range(2, 21)),
+    vectors: Events | list[ndarray] | ndarray,
+    k: list[int] | int = tuple(range(2, 21)),
     direction: Optional[str] = None,
     n_components: int = 10,
     metric: str = 'cosine',

@@ -6,7 +6,7 @@ This module provides functions for anomaly detection and baseline determination 
 data.
 """
 
-from numpy import quantile, sign, sort, concatenate, sqrt, round, ones, zeros, mean, ceil, cumsum, abs, compress, \
+from numpy import quantile, sign, sort, concatenate, sqrt, round, ones, zeros, mean, ceil, cumsum, abs, atleast_1d, \
     percentile, ndarray, std, sum, max, median, asarray, array_split, double, int64, uint8, flatnonzero, empty, \
     bitwise_xor, greater_equal, less_equal, searchsorted, column_stack, full, minimum, maximum, roll, pad, argsort, int8
 from scipy.signal import oaconvolve
@@ -35,14 +35,15 @@ def not_normal(
     trace: ndarray | Trace,
     sample_rate: Optional[int] = None,
     bounds_window: cython.int = 3,
-    estimate_cutoff: cython.double = 10.0,
+    cutoff: cython.double = 10.0,
     replace_factor: cython.double = 8.0,
     replace_gap: cython.double = 2.0,
     threshold_window: cython.double = 2.0,
     z_score: Optional[float] = None,
     output_features: Optional[str] = 'full',
     vector_results: cython.bint = False,
-    parallel: cython.bint = False
+    parallel: cython.bint = False,
+    segment_size: Optional[int] = None,
 ) -> tuple[IterateResults, InitialEstimateResults]:
     """
     Anomaly detection and baseline determination for (nano)electrochemical time series data. This function combines
@@ -53,7 +54,7 @@ def not_normal(
         trace (ndarray | Trace): The input trace or a Trace object. If ndarray, the sample rate must be provided.
         sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
         bounds_window (int): The window size for the median filter used in bounding. Default is 3.
-        estimate_cutoff (float): The initial estimate for the cutoff frequency. Default is 10.0.
+        cutoff (float): The initial estimate for the cutoff frequency. Default is 10.0.
         replace_factor (float): Factor for replacing events in the calculation trace. Default is 8.0.
         replace_gap (float): Gap for replacing events in the calculation trace. Default is 2.0.
         threshold_window (float): The window size for threshold calculation. Default is 2.0.
@@ -63,7 +64,9 @@ def not_normal(
             for full width at half maximum or quarter maximum, respectively. These apply to duration, area, and peak
             amplitude. None specifies no events on the output. Default is 'full'.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
-        parallel (bool): Whether to run the iteration in parallel. Default is False.
+        parallel (bool): Whether to run the algorithm in parallel. Default is False.
+        segment_size (int | None): Size of segments for parallel processing. Default is None and will calculate
+            automatically.
 
     Returns:
         tuple[IterateResults, InitialEstimateResults]: The iteration results object and initial estimate results object.
@@ -73,18 +76,13 @@ def not_normal(
     filtered_trace = _bounds_filter(trace, bounds_window)
 
     # Initial estimate for the cutoff frequency and direction
-    estimate_results = initial_estimate(trace, filtered_trace, sample_rate, estimate_cutoff, replace_factor, replace_gap,
-                                        threshold_window, z_score, output_features, vector_results)
+    estimate_results = initial_estimate(trace, filtered_trace, sample_rate, cutoff, replace_factor, replace_gap,
+                                        threshold_window, z_score, output_features, vector_results, parallel, segment_size)
 
     # Iterate based on the initial estimate
-    args = {'trace': trace, 'cutoff': estimate_results.max_cutoff, 'event_direction': estimate_results.event_direction,
-            'filtered_trace': filtered_trace, 'sample_rate': sample_rate, 'replace_factor': replace_factor,
-            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
-            'output_features': output_features, 'vector_results': vector_results}
-    if parallel:
-        iteration_results = parallel_iterate(**args)
-    else:
-        iteration_results = iterate(**args)
+    iteration_results = iterate(trace, estimate_results.max_cutoff, estimate_results.event_direction, filtered_trace,
+                                  sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features,
+                                  vector_results, parallel, segment_size)
 
     return iteration_results, estimate_results
 
@@ -93,14 +91,15 @@ def initial_estimate(
     trace: ndarray | Trace,
     filtered_trace: Optional[ndarray] = None,
     sample_rate: Optional[int] = None,
-    estimate_cutoff: cython.double = 10.0,
+    cutoff: cython.double = 10.0,
     replace_factor: cython.double = 8.0,
     replace_gap: cython.double = 2.0,
     threshold_window: cython.double = 2.0,
     z_score: Optional[float] = None,
     output_features: Optional[str] = 'full',
     vector_results: cython.bint = False,
-    _validate: cython.bint = True
+    parallel: cython.bint = False,
+    segment_size: Optional[int] = None,
 ) -> InitialEstimateResults:
     """
     Provides an initial estimate for the maximum cutoff frequency and event direction for the iterate function. The output
@@ -118,7 +117,7 @@ def initial_estimate(
         filtered_trace (ndarray | None): The filtered version of the input trace, used for bounding events. If None,
             the trace is used. Default is None.
         sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
-        estimate_cutoff (float): The initial estimate for the cutoff frequency. Default is 10.0.
+        cutoff (float): The initial estimate for the cutoff frequency. Default is 10.0.
         replace_factor (float): Factor for replacing events in the calculation trace. Default is 8.0.
         replace_gap (float): Gap for replacing events in the calculation trace. Default is 2.0.
         threshold_window (float): The window size for threshold calculation. Default is 2.0.
@@ -128,203 +127,40 @@ def initial_estimate(
             for full width at half maximum or quarter maximum, respectively. These apply to duration, area, and peak
             amplitude. None specifies no events on the output. Default is 'full'.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
-        _validate (bool): Whether to validate the inputs. Do not disable unless you have validated externally.
-            Default is True.
+        parallel (bool): Whether to run the initial estimate in parallel. Default is False.
+        segment_size (int | None): Size of segments for parallel processing. Default is None and will calculate
+            automatically.
 
     Returns:
         InitialEstimateResults: An object containing the initial estimate results.
     """
 
-    # Validate all the inputs
-    trace, sample_rate, label, filtered_trace, z_score, bl_args, lr_args = _validate_input(trace, estimate_cutoff,
-        filtered_trace, sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features, _validate=_validate)
+    # Init results and get args
+    results = InitialEstimateResults(InitialEstimateArgs(**{k: v for k, v in locals().items() if k in InitialEstimateArgs.__annotations__}))
+    args = results.args.get_func_args()
 
-    # Get args
-    args = {'sample_rate': sample_rate, 'estimate_cutoff': estimate_cutoff, 'replace_factor': replace_factor,
-            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
-            'output_features': output_features, 'vector_results': vector_results, '_validate': _validate}
-    results = InitialEstimateResults(InitialEstimateArgs(**args))
-
-    # Easter egg
-    calc_trace = trace
-    coordinates = None
-    current = None
-
-    # Iterate 3 times
-    i: cython.int = 1
-    for i in range(3):
-        if i == 0:
-            # Baseline, threshold, and trace statistics on the calculation trace
-            baseline, threshold, trace_stats = _baseline_threshold(calc_trace, event_coordinates=coordinates, **bl_args)
-        else:
-            # Do not compute trace statistics after the first iteration
-            baseline, threshold = _baseline_threshold(calc_trace, event_coordinates=None, compute_stats=False, **bl_args)
-
-        # Store results if vector_results or the final iteration
-        current = Iteration()
-        if vector_results or i == 2:
-            current.calculation_trace, current.baseline, current.threshold = calc_trace, baseline, threshold
-
-        if i == 0:
-            # (1) Remove events from the side of most influence (save this initial threshold and direction)
-            event_direction = 'up' if trace_stats['Influence'] > 0 else 'down'
-            results.initial_threshold, results.event_direction, current.trace_stats = threshold, event_direction, trace_stats
-            coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                                   event_direction, **lr_args)
-        elif i == 1:
-            # (2) Remove events from the opposite side
-            coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                       'up' if results.event_direction == 'down' else 'down', **lr_args)
-        else:
-            # (3) Final extraction now both sides are removed
-            coordinates, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                       'biphasic', replace=False, **lr_args)
-
-        # Store results
-        current.event_coordinates, current.event_stats = coordinates, event_stats
-        results.iterations.append(current)
+    if parallel:
+        results.iterations, results.initial_threshold, results.event_direction = _parallel_estimate(*args)
+    else:
+        results.iterations, results.initial_threshold, results.event_direction = _serial_estimate(*args)
 
 
     # (4) Calculate the required cutoffs (using the initial threshold)
-    event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(trace, baseline, results.initial_threshold, coordinates,
-                                                                estimate_cutoff, sample_rate)
-    results.max_cutoff = event_stats['Max Cutoff']
+    final = results.iterations[-1]
+    final.event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(args[0], final.baseline, results.initial_threshold,
+                                                      final.event_coordinates, args[2]['cutoff'], args[2]['sample_rate'])
+    results.max_cutoff = final.event_stats['Max Cutoff']
 
     # If events are requested
     if output_features is not None:
         # Extract the events
-        results.events = simple_extractor(trace, baseline, coordinates, sample_rate, output_features, label)
+        results.events = simple_extractor(args[0], final.baseline, final.event_coordinates, args[2]['sample_rate'],
+                                          args[4]['output_features'], "Initial Estimate")
         results.events.add_feature('Max Cutoff', all_cutoffs)
 
         # Expected number of extractions which are not events
-        event_stats['False Positives'], event_stats['Significant Events'] = _expected_outliers(trace, baseline, threshold,
-                                                                                               coordinates, z_score)
-
-    return results
-
-
-def parallel_iterate(
-    trace: ndarray | Trace,
-    cutoff: cython.double,
-    event_direction: str,
-    filtered_trace: Optional[ndarray] = None,
-    sample_rate: Optional[int] = None,
-    replace_factor: cython.double = 8.0,
-    replace_gap: cython.double = 2.0,
-    threshold_window: cython.double = 2.0,
-    z_score: Optional[float] = None,
-    output_features: Optional[str] = 'full',
-    vector_results: cython.bint = False,
-    segment_size: Optional[int] = None
-) -> IterateResults:
-    """
-    Parallel equivalent to the iterate function.
-
-    Args:
-        trace (ndarray | Trace): The input trace or a Trace object. If ndarray, the sample rate must be provided.
-        cutoff (float): The cutoff frequency for the baseline filter derived from initial_estimate.
-        event_direction (str): The direction of events ('up', 'down', or 'biphasic') derived from initial_estimate.
-        filtered_trace (ndarray | None): The filtered version of the input trace, used for bounding events.
-            If None, the trace is used. Default is None.
-        sample_rate (int | None): The sample rate of the trace. Has to be provided if trace is a ndarray. Default is None.
-        replace_factor (float): Factor for replacing events in the calculation trace. Default is 8.0.
-        replace_gap (float): Gap for replacing events in the calculation trace. Default is 2.0.
-        threshold_window (float): The window size for threshold calculation. Default is 2.0.
-        z_score (float | None): The Z-score for event detection. If None, it is calculated based on the trace length.
-            Default is None.
-        output_features (str | None): The output event features. Can be 'full' for absolute features, 'FWHM', or 'FWQM'
-            for full width at half maximum or quarter maximum, respectively. These apply to duration, area, and peak
-            amplitude. None specifies no events on the output. Default is 'full'.
-        vector_results (bool): Whether to return vector results, this is not possible in parallel, but will assert on
-            the fallback to serial. Default is False.
-        segment_size (int | None): Size of segments for parallel processing. Default is None and will calculate
-            automatically.
-
-    Returns:
-        IterateResults: An object containing the iterate results.
-    """
-
-    # Validate all the inputs
-    obj = trace
-    trace, sample_rate, label, filtered_trace, z_score, _, _ = _validate_input(trace, cutoff, filtered_trace, sample_rate,
-                                replace_factor, replace_gap, threshold_window, z_score, output_features, event_direction)
-
-    # Init results and get args
-    results = IterateResults(IterateArgs(**{k: v for k, v in locals().items() if k in IterateArgs.__annotations__},
-                                         **{'_validate': True}))
-
-    # Default to the same size as the confirmed stopping criterion accuracy or threshold accuracy, whichever is larger
-    minimum_segment = max([1000000.0, (sample_rate * 2.0), (sample_rate * threshold_window)])
-    segment_size = int(min([len(trace), max([segment_size or 0, minimum_segment])]))
-    splits = len(trace) // segment_size
-
-    # Not worth it to parallelize if the trace is too small
-    if splits < 5:
-        result = iterate(obj, cutoff, event_direction, filtered_trace, sample_rate, replace_factor, replace_gap,
-                       threshold_window, z_score, output_features, vector_results, _validate=True)
-        return result
-
-    # Get the chunks for parallel processing
-    chunk_pairs = list(zip(array_split(trace, splits), array_split(filtered_trace, splits)))
-
-    # Make an estimate of the memory required for the trace
-    final_mem = max([0, (virtual_memory().available + swap_memory().free) - (trace.nbytes * 5)])
-    max_workers = max([1, final_mem // (chunk_pairs[0][0].nbytes * 5)])
-    processes = int(min(cpu_count(), splits, max_workers))
-    chunksize = int(max([1, len(chunk_pairs) // (4 * processes)]))
-
-    # Get function (don't extract events, return vector results, or validate)
-    args_list = [(trace_chunk, cutoff, event_direction, filtered_trace_chunk, sample_rate, replace_factor, replace_gap,
-                  threshold_window, z_score, None, False, False) for trace_chunk, filtered_trace_chunk in chunk_pairs]
-
-    # Spawn safe multiprocessing pool
-    with get_context("spawn").Pool(processes=processes) as pool:
-        result = pool.starmap(iterate, args_list, chunksize=chunksize)
-        chunk_pairs = None
-        collect()
-
-    # Extract final iterations
-    results.initial_threshold = concatenate([r.initial_threshold for r in result])
-    attr_names = ["baseline", "threshold", "calculation_trace", "trace_stats"]
-    last_items = [res.iterations[len(res.iterations) - 1] for res in result]
-    lengths = [len(item.baseline) for item in last_items]
-    offsets = cumsum([0] + lengths[:len(lengths) - 1])
-
-    # Reduce arrays
-    iteration = Iteration()
-    for name in attr_names:
-        arrays = [getattr(item, name) for item in last_items]
-        if name == 'trace_stats':
-            setattr(iteration, name, {k: mean([v for d in arrays if (v := d.get(k)) is not None]) for k in arrays[0].keys()})
-        else:
-            setattr(iteration, name, concatenate(arrays))
-
-    # Offset and concatenate event coordinates
-    coords_list = [item.event_coordinates + offset for item, offset in zip(last_items, offsets)
-                    if item.event_coordinates is not None and item.event_coordinates.size]
-    iteration.event_coordinates = concatenate(coords_list) if coords_list else zeros((0, 2), dtype=int64)
-
-    # Get event stats
-    event_stats = _event_statistics(iteration.event_coordinates)
-    iteration.event_stats = event_stats
-
-    # If events are requested
-    if output_features is not None:
-        # Extract the events
-        results.events = simple_extractor(trace, iteration.baseline, iteration.event_coordinates, sample_rate,
-                                          output_features, label)
-
-        # Calculate the required cutoffs (using the initial threshold)
-        event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(trace, iteration.baseline, results.initial_threshold,
-                                                                    iteration.event_coordinates, cutoff, sample_rate)
-        results.events.add_feature('Max Cutoff', all_cutoffs)
-
-        # Expected number of extractions which are not events
-        event_stats['False Positives'], event_stats['Significant Events'] = _expected_outliers(trace, iteration.baseline,
-                                                              iteration.threshold, iteration.event_coordinates, z_score)
-
-    # Place the iteration in the results
-    results.iterations.append(iteration)
+        final.event_stats['False Positives'], final.event_stats['Significant Events'] = _expected_outliers(args[0],
+                                           final.baseline, final.threshold, final.event_coordinates, args[2]['z_score'])
 
     return results
 
@@ -341,7 +177,8 @@ def iterate(
     z_score: Optional[float] = None,
     output_features: Optional[str] = 'full',
     vector_results: cython.bint = False,
-    _validate: cython.bint = True
+    parallel: cython.bint = False,
+    segment_size: Optional[int] = None,
 ) -> IterateResults:
     """
     Performs iterative anomaly detection and baseline determination based on the input (maximised) cutoff frequency and
@@ -379,87 +216,39 @@ def iterate(
             for full width at half maximum or quarter maximum, respectively. These apply to duration, area, and peak
             amplitude. None specifies no events on the output. Default is 'full'.
         vector_results (bool): Whether to return vector results, this is very expensive. Default is False.
-        _validate (bool): Whether to validate the inputs. Do not disable unless you have validated externally.
-            Default is True.
+        parallel (bool): Whether to run the iteration in parallel. Default is False.
+        segment_size (int | None): Size of segments for parallel processing. Default is None and will calculate
+            automatically.
 
     Returns:
         IterateResults: An object containing the iterate results.
     """
 
-    # Validate all the inputs
-    trace, sample_rate, label, filtered_trace, z_score, bl_args, lr_args = _validate_input(trace, cutoff, filtered_trace,
-       sample_rate, replace_factor, replace_gap, threshold_window, z_score, output_features, event_direction, _validate)
-
     # Init results and get args
-    args = {'cutoff': cutoff, 'event_direction': event_direction, 'sample_rate': sample_rate, 'replace_factor': replace_factor,
-            'replace_gap': replace_gap, 'threshold_window': threshold_window, 'z_score': z_score,
-            'output_features': output_features, 'vector_results': vector_results, '_validate': _validate}
-    results = IterateResults(IterateArgs(**args))
+    results = IterateResults(IterateArgs(**{k: v for k, v in locals().items() if k in IterateArgs.__annotations__}))
+    args = results.args.get_func_args()
 
-    # Easter egg
-    calc_trace = trace
-    coordinates = None
-    current = None
-
-    # Iterate until the stopping criterion is met
-    i: cython.int = 1
-    while True:
-        # Baseline, threshold, and trace statistics on the calculation trace
-        baseline, threshold, trace_stats = _baseline_threshold(calc_trace, event_coordinates=coordinates, **bl_args)
-
-        # For calculating maximum cutoffs
-        if i == 1:
-            results.initial_threshold = threshold
-
-        # Stopping criterion
-        if i > 2 and trace_stats['Overall'] <= current.trace_stats['Overall']:
-            break
-
-        # Direction criterion
-        if i > 1 and (event_direction == 'down' and trace_stats['Influence'] > 0 or
-                      event_direction == 'up' and trace_stats['Influence'] < 0):
-            event_direction = 'biphasic'
-
-        # Store results
-        current = Iteration()
-        if vector_results:
-            current.calculation_trace, current.baseline, current.threshold = calc_trace, baseline, threshold
-
-        # Locate events from the raw trace, bounds from the filtered trace, and replace events in the calculation trace
-        coordinates, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                                               event_direction, **lr_args)
-
-        # Store results
-        current.trace_stats, current.event_coordinates, current.event_stats = trace_stats, coordinates, event_stats
-        results.iterations.append(current)
-        i += 1
-
-    # Determine the final baseline and threshold before extracting the final events
-    trace_stats = current.trace_stats
-    coordinate_view: cython.longlong[:, ::1] = current.event_coordinates
-    baseline = _event_replacer(baseline, calc_trace, coordinate_view, replace_factor=0, replace_gap=0)
-    threshold = _thresholder((calc_trace - baseline), z_score, int(threshold_window * sample_rate), method='std',
-                             event_mask=__event_mask(current.event_coordinates, len(trace)))
-    coordinates, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
-                                          'biphasic', replace=False, **lr_args)
+    if parallel:
+        results.iterations, results.initial_threshold = _parallel_iterate(*args)
+    else:
+        results.iterations, results.initial_threshold = _serial_iterate(*args)
 
     # If events are requested
     if output_features is not None:
+        final = results.iterations[-1]
+
         # Extract the events
-        results.events = simple_extractor(trace, baseline, coordinates, sample_rate, output_features, label)
+        results.events = simple_extractor(args[0], final.baseline, final.event_coordinates, args[2]['sample_rate'],
+                                          args[4]['output_features'], "Iterate")
 
         # Calculate the required cutoffs (using the initial threshold)
-        event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(trace, baseline, results.initial_threshold,
-                                                                    coordinates, cutoff, sample_rate)
+        final.event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(args[0], final.baseline, results.initial_threshold,
+                                                            final.event_coordinates, args[2]['cutoff'], args[2]['sample_rate'])
         results.events.add_feature('Max Cutoff', all_cutoffs)
 
         # Expected number of extractions which are not events
-        event_stats['False Positives'], event_stats['Significant Events'] = _expected_outliers(trace, baseline, threshold,
-                                                                                               coordinates, z_score)
-
-    # Store the final vectors
-    results.iterations.append(Iteration(calculation_trace=calc_trace, baseline=baseline, threshold=threshold,
-                                        trace_stats=trace_stats, event_coordinates=coordinates, event_stats=event_stats))
+        final.event_stats['False Positives'], final.event_stats['Significant Events'] = _expected_outliers(args[0],
+                                          final.baseline, final.threshold, final.event_coordinates, args[2]['z_score'])
 
     return results
 
@@ -549,6 +338,319 @@ def simple_extractor(
 Internal API
 """
 
+
+def _serial_estimate(
+    trace: ndarray,
+    filtered_trace: ndarray,
+    bl_args: dict[str, any],
+    lr_args: dict[str, any],
+    gen_args: dict[str, any]
+) -> tuple[list[Iteration], ndarray, str]:
+    """
+    Serial equivalent to the initial_estimate function, see: initial_estimate for details.
+    """
+
+    # Easter egg
+    iterations, initial_threshold, current, coords, calc_trace = [], None, None, None, trace
+
+    # Iterate 3 times
+    i: cython.int = 1
+    for i in range(3):
+        if i == 0:
+            # Baseline, threshold, and trace statistics on the calculation trace
+            baseline, threshold, trace_stats = _baseline_threshold(calc_trace, event_coordinates=coords, **bl_args)
+        else:
+            # Do not compute trace statistics after the first iteration
+            baseline, threshold = _baseline_threshold(calc_trace, event_coordinates=coords, compute_stats=False, **bl_args)
+
+        # Store results if vector_results or the final iteration
+        current = Iteration()
+        if gen_args['vector_results'] or i == 2:
+            current.calculation_trace, current.baseline, current.threshold = calc_trace, baseline, threshold
+
+        if i == 0:
+            # (1) Remove events from the side of most influence (save this initial threshold and direction)
+            lr_args['event_direction'] = 'up' if trace_stats['Influence'] > 0 else 'down'
+            initial_threshold, event_direction, current.trace_stats = threshold, lr_args['event_direction'], trace_stats
+            coords, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
+                                                              **lr_args)
+        elif i == 1:
+            # (2) Remove events from the opposite side
+            lr_args['event_direction'] = 'up' if event_direction == 'down' else 'down'
+            coords, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold,
+                                                              **lr_args)
+        else:
+            # (3) Final extraction now both sides are removed
+            lr_args['event_direction'] = 'biphasic'
+            coords, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold, replace=False,
+                                                  **lr_args)
+
+        # Store results
+        current.event_stats, current.event_coordinates = event_stats, coords
+        iterations.append(current)
+
+    return iterations, initial_threshold, event_direction
+
+
+def _parallel_estimate(
+    trace: ndarray,
+    filtered_trace: ndarray,
+    bl_args: dict[str, any],
+    lr_args: dict[str, any],
+    gen_args: dict[str, any]
+) -> tuple[list[Iteration], ndarray, str]:
+    """
+    Parallel equivalent to the initial_estimate function, see: initial_estimate for details.
+    """
+
+    # Calculate the parallel configuration
+    splits, processes, chunksize = _calc_parallel(trace, bl_args['sample_rate'], bl_args['threshold_window'],
+                                                  gen_args['segment_size'])
+
+    # Not worth it to parallelize if the trace is too small
+    if splits < 10:
+        result = _serial_estimate(trace, filtered_trace, bl_args, lr_args, gen_args)
+        return result
+
+    # Get the chunks for parallel processing
+    chunk_pairs = list(zip(array_split(trace, splits), array_split(filtered_trace, splits)))
+    # Get function (don't extract events, return vector results, or validate)
+    args_list = [(trace_chunk, filtered_trace_chunk, bl_args, lr_args, gen_args) for
+                 trace_chunk, filtered_trace_chunk in chunk_pairs]
+
+    # Spawn safe multiprocessing pool
+    with get_context("spawn").Pool(processes=processes) as pool:
+        result = pool.starmap(_serial_estimate, args_list, chunksize=chunksize)
+        chunk_pairs = None
+    collect()
+
+    # Reduce results
+    initial_threshold = concatenate([r[1] for r in result])
+    iterations = []
+    n_iters = len(result[0][0])
+    attr_names = ["baseline", "threshold", "calculation_trace", "trace_stats", "event_coordinates", "event_stats"]
+    # Calculate segment offsets for event coordinates
+    lengths = [len(item.baseline) for item in [res[0][len(res[0]) - 1] for res in result]]
+    offsets = cumsum([0] + lengths[:len(lengths) - 1])
+
+    for i in range(n_iters):
+        items = [res[0][i] for res in result]
+        iteration = Iteration()
+
+        # Reduce arrays
+        for name in attr_names:
+            arrays = [getattr(item, name) for item in items]
+
+            # No arrays
+            if all(a is None for a in arrays):
+                setattr(iteration, name, None)
+                continue
+
+            # Trace statistic dictionaries
+            if name == 'trace_stats':
+                dicts = [d for d in arrays if d is not None]
+                keys = dicts[0].keys()
+                setattr(iteration, name, {k: mean([v for d in dicts if (v := d.get(k)) is not None]) for k in keys})
+                continue
+
+            # Offset and concatenate event coordinates
+            if name == 'event_coordinates':
+                coords_list = [item.event_coordinates + offset for item, offset in zip(items, offsets)
+                               if item.event_coordinates is not None and item.event_coordinates.size]
+                setattr(iteration, name, concatenate(coords_list) if coords_list else zeros((0, 2), dtype=int64))
+                continue
+
+            # Get event stats
+            if name == 'event_stats':
+                setattr(iteration, name, _event_statistics(iteration.event_coordinates))
+                continue
+
+            # Regular arrays
+            arrays = [atleast_1d(a) for a in arrays if a is not None]
+            setattr(iteration, name, concatenate(arrays))
+
+        iterations.append(iteration)
+
+    # Get event direction
+    event_direction = 'up' if iterations[0].trace_stats['Influence'] > 0 else 'down'
+
+    return iterations, initial_threshold, event_direction
+
+
+def _serial_iterate(
+    trace: ndarray,
+    filtered_trace: ndarray,
+    bl_args: dict[str, any],
+    lr_args: dict[str, any],
+    gen_args: dict[str, any]
+) -> tuple[list[Iteration], ndarray]:
+    """
+    Serial equivalent to the iterate function, see: iterate for details.
+    """
+
+    # Easter egg
+    iterations, initial_threshold, current, coords, calc_trace = [], None, None, None, trace
+
+    # Iterate until the stopping criterion is met
+    i: cython.int = 1
+    while True:
+        # Baseline, threshold, and trace statistics on the calculation trace
+        baseline, threshold, trace_stats = _baseline_threshold(calc_trace, event_coordinates=coords, **bl_args)
+
+        # For calculating maximum cutoffs
+        if i == 1:
+            initial_threshold = threshold
+
+        # Stopping criterion
+        if i > 2 and trace_stats['Overall'] <= current.trace_stats['Overall']:
+            break
+
+        # Direction criterion
+        if i > 1 and (lr_args['event_direction'] == 'down' and trace_stats['Influence'] > 0 or
+                      lr_args['event_direction'] == 'up' and trace_stats['Influence'] < 0):
+            lr_args['event_direction'] = 'biphasic'
+
+        # Store results
+        current = Iteration(trace_stats=trace_stats)
+        if gen_args['vector_results']:
+            current.calculation_trace, current.baseline, current.threshold = calc_trace, baseline, threshold
+
+        # Locate events from the raw trace, bounds from the filtered trace, and replace events in the calculation trace
+        coords, calc_trace, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold, **lr_args)
+
+        # Store results
+        current.event_stats, current.event_coordinates = event_stats, coords
+        iterations.append(current)
+        i += 1
+
+    # Determine the final baseline and threshold (calc_trace IS local baseline after individual replacement)
+    coordinate_view: cython.longlong[:, ::1] = coords
+    baseline = _event_replacer(baseline, calc_trace, coordinate_view, replace_factor=0, replace_gap=0)
+    threshold = _thresholder((calc_trace - baseline), bl_args['z_score'], bl_args['threshold_window'], method='std',
+                             event_mask=__event_mask(coords, len(trace)))
+
+    # Final extraction is always biphasic
+    lr_args['event_direction'] = 'biphasic'
+    coords, event_stats = _locate_replace(trace, filtered_trace, calc_trace, baseline, threshold, replace=False, **lr_args)
+
+    # Store the final vectors
+    iterations.append(Iteration(calculation_trace=calc_trace, baseline=baseline, threshold=threshold,
+                                trace_stats=current.trace_stats, event_coordinates=coords, event_stats=event_stats))
+
+    return iterations, initial_threshold
+
+
+def _parallel_iterate(
+    trace: ndarray,
+    filtered_trace: ndarray,
+    bl_args: dict[str, any],
+    lr_args: dict[str, any],
+    gen_args: dict[str, any]
+) -> tuple[list[Iteration], ndarray]:
+    """
+    Parallel equivalent to the iterate function, see: iterate for details.
+    """
+
+    # Calculate the parallel configuration
+    splits, processes, chunksize = _calc_parallel(trace, bl_args['sample_rate'], bl_args['threshold_window'],
+                                                  gen_args['segment_size'])
+
+    # Not worth it to parallelize if the trace is too small
+    if splits < 5:
+        result = _serial_iterate(trace, filtered_trace, bl_args, lr_args, gen_args)
+        return result
+
+    # Get the chunks for parallel processing
+    chunk_pairs = list(zip(array_split(trace, splits), array_split(filtered_trace, splits)))
+    # Get function (don't extract events, return vector results, or validate)
+    args_list = [(trace_chunk, filtered_trace_chunk, bl_args, lr_args, gen_args) for
+                 trace_chunk, filtered_trace_chunk in chunk_pairs]
+
+    # Spawn safe multiprocessing pool
+    with get_context("spawn").Pool(processes=processes) as pool:
+        result = pool.starmap(_serial_iterate, args_list, chunksize=chunksize)
+        chunk_pairs = None
+    collect()
+
+    # Reduce results
+    initial_threshold = concatenate([r[1] for r in result])
+    attr_names = ["baseline", "threshold", "calculation_trace", "trace_stats", "event_coordinates", "event_stats"]
+    # Calculate segment offsets for event coordinates
+    items = [res[0][len(res[0]) - 1] for res in result]
+    lengths = [len(item.baseline) for item in items]
+    offsets = cumsum([0] + lengths[:len(lengths) - 1])
+    iteration = Iteration()
+
+    # Reduce arrays
+    for name in attr_names:
+        arrays = [getattr(item, name) for item in items]
+
+        # No arrays
+        if all(a is None for a in arrays):
+            setattr(iteration, name, None)
+            continue
+
+        # Trace statistic dictionaries
+        if name == 'trace_stats':
+            dicts = [d for d in arrays if d is not None]
+            keys = dicts[0].keys()
+            setattr(iteration, name, {k: mean([v for d in dicts if (v := d.get(k)) is not None]) for k in keys})
+            continue
+
+        # Offset and concatenate event coordinates
+        if name == 'event_coordinates':
+            coords_list = [item.event_coordinates + offset for item, offset in zip(items, offsets)
+                           if item.event_coordinates is not None and item.event_coordinates.size]
+            setattr(iteration, name, concatenate(coords_list) if coords_list else zeros((0, 2), dtype=int64))
+            continue
+
+        # Get event stats
+        if name == 'event_stats':
+            setattr(iteration, name, _event_statistics(iteration.event_coordinates))
+            continue
+
+        # Regular arrays
+        arrays = [atleast_1d(a) for a in arrays if a is not None]
+        setattr(iteration, name, concatenate(arrays))
+
+
+    return [iteration], initial_threshold
+
+
+def _calc_parallel(
+    trace: ndarray,
+    sample_rate: cython.int,
+    threshold_window: cython.longlong,
+    segment_size: Optional[int] = None
+) -> tuple[int, int, int]:
+    """
+    Calculate the parallel processing configuration for the parallel_iterate function.
+
+    Args:
+        trace (ndarray): The input trace.
+        sample_rate (int): The sample rate of the trace.
+        threshold_window (float): The window size for threshold calculation.
+        segment_size (int | None): Size of segments for parallel processing. Default is None and will calculate
+            automatically.
+
+    Returns:
+        tuple[int, int, int]: The number of trace splits, the number of processes, and the chunksize.
+    """
+
+    # Default to the same size as the confirmed stopping criterion accuracy or threshold accuracy, whichever is larger
+    minimum_segment = max([1000000.0, (sample_rate * 2.0), threshold_window])
+    segment_size = int(min([len(trace), max([segment_size or 0, minimum_segment])]))
+    splits = len(trace) // segment_size
+
+    # Make an estimate of the memory required for the trace
+    final_mem = max([0, (virtual_memory().available + swap_memory().free) - (trace.nbytes * 6)])
+    max_workers = max([1, final_mem // (trace.nbytes * 6)])
+    processes = int(min(cpu_count(), splits, max_workers))
+    chunksize = int(max([1, splits // (4 * processes)]))
+
+    return splits, processes, chunksize
+
+
 def _bounds_filter(trace: ndarray | Trace, window: cython.int) -> ndarray:
     """
     Apply a median filter to the trace to be used for bounding. This will be deprecated in the future.
@@ -566,84 +668,6 @@ def _bounds_filter(trace: ndarray | Trace, window: cython.int) -> ndarray:
         trace = trace.trace
 
     return median_filter(trace, window) if window else asarray(trace).copy(order="C")
-
-
-def _validate_input(
-    trace: ndarray | Trace,
-    cutoff: cython.double,
-    filtered_trace: Optional[ndarray],
-    sample_rate: Optional[int],
-    replace_factor: cython.double,
-    replace_gap: cython.double,
-    threshold_window: cython.double,
-    z_score: Optional[float],
-    output_features: Optional[str],
-    event_direction: Optional[str] = None,
-    _validate: cython.bint = True
-) -> tuple[ndarray, cython.int, str, ndarray, cython.double, dict[str, any], dict[str, any]]:
-    """
-    Helper to validate the input parameters for the iterate and initial_estimate. For arguments see: initial_estimate
-    and iterate.
-    """
-
-    # Do not validate
-    if not _validate:
-        # Arguments for _baseline_threshold and _locate_replace
-        bl_args = {'cutoff': cutoff, 'sample_rate': sample_rate, 'z_score': z_score,
-                   'threshold_window': int(threshold_window * sample_rate)}
-        lr_args = {'replace_factor': replace_factor, 'replace_gap': replace_gap}
-        return trace, sample_rate, '', filtered_trace, z_score, bl_args, lr_args
-
-    # Trace or ndarray input
-    if isinstance(trace, Trace):
-        label, sample_rate, trace = trace.label, trace.sample_rate, trace.trace
-    else:
-        label = ''
-    if sample_rate is None:
-        raise ValueError("Sample rate must be provided if trace is a ndarray.")
-
-    # Ensure safety
-    trace = asarray(trace)
-    if (not trace.flags['C_CONTIGUOUS']) or (not trace.flags['OWNDATA']):
-        trace = trace.copy(order='C')
-
-    # Use the normal trace if no bounding trace is supplied
-    if filtered_trace is None:
-        filtered_trace = trace
-
-    # Ensure safety
-    filtered_trace = asarray(filtered_trace)
-    if (not filtered_trace.flags['C_CONTIGUOUS']) or (not filtered_trace.flags['OWNDATA']):
-        filtered_trace = filtered_trace.copy(order='C')
-
-    # Default to 1 expected outlier per trace (computed on length, of course)
-    if z_score is None:
-        z_score = float(norm.ppf(1.0 - ((1.0 / len(trace)) / 2.0)))
-
-    # Check input parameters
-    if trace.shape != filtered_trace.shape:
-        raise ValueError("Trace and filtered trace must have the same shape.")
-    if not (0 < cutoff <= sample_rate // 2):
-        raise ValueError("Cutoff frequency must be between 0 and sample rate // 2.")
-    if replace_gap < 0 or replace_factor < 0:
-        raise ValueError("Replace factor and gap must be non-negative.")
-    if replace_factor == 0 and replace_gap > 0:
-        raise ValueError("Replace factor cannot be 0 if replace gap is greater than 0.")
-    if threshold_window <= 0:
-        raise ValueError("Threshold window must be greater than 0.")
-    if z_score <= 0:
-        raise ValueError("Z-score must be greater than 0.")
-    if event_direction is not None and event_direction not in ('up', 'down', 'biphasic'):
-        raise ValueError("Event direction must be 'up', 'down', or 'biphasic'.")
-    if output_features is not None and output_features not in ('full', 'FWHM', 'FWQM'):
-        raise ValueError("Output features must be 'full', 'FWHM', or 'FWQM'.")
-
-    # Arguments for _baseline_threshold and _locate_replace
-    bl_args = {'cutoff': cutoff, 'sample_rate': sample_rate, 'z_score': z_score,
-               'threshold_window': int(threshold_window * sample_rate)}
-    lr_args = {'replace_factor': replace_factor, 'replace_gap': replace_gap}
-
-    return trace, sample_rate, label, filtered_trace, z_score, bl_args, lr_args
 
 
 def _expected_outliers(
@@ -1044,6 +1068,7 @@ def _event_replacer(
                 filled = (length - int(round(event_length * replace_gap))) // 2
                 window[filled:length - filled] = 0.0
             window = window / sum(window)
+
             half_length = length // 2
             __WINDOW_CACHE[(length, round(replace_factor, 6), round(replace_gap, 6))] = (window, half_length)
 

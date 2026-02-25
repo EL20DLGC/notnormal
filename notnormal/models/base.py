@@ -6,8 +6,11 @@ This module provides data models for representing the various function outputs i
 reconstruction, clustering, and filtering.
 """
 
+from __future__ import annotations
+from notnormal.models.supers import BaseDataclass
+from scipy.stats import norm
 from typing import Any, Optional, Callable
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from collections.abc import Iterator
 from warnings import warn
 from numpy import ndarray, arange, sum, asarray
@@ -21,7 +24,7 @@ Representations of trace and events
 """
 
 @dataclass(slots=True)
-class Trace:
+class Trace(BaseDataclass):
     """
     A dataclass to represent a trace.
 
@@ -39,16 +42,16 @@ class Trace:
     label: str
     trace: ndarray
     sample_rate: int
-    units: str = 'pA'
+    units: str = field(default='pA')
     path: Optional[str] = None
     time_step: Optional[float] = None
     samples: Optional[int] = None
     duration: Optional[float] = None
 
 
-    def __post_init__(self):
+    def _normalise(self):
         """
-        Populate the Trace object with values if not provided.
+        Normalise input parameters.
         """
 
         # Ensure safety
@@ -56,12 +59,43 @@ class Trace:
         if (not self.trace.flags['C_CONTIGUOUS']) or (not self.trace.flags['OWNDATA']):
             self.trace = self.trace.copy(order='C')
 
+        # Autofill time_step
         if self.time_step is None:
             self.time_step = 1 / self.sample_rate
+
+        # Autofill samples
         if self.samples is None:
-            self.samples = len(self.trace)
+            self.samples = self.trace.shape[0]
+
+        # Autofill duration
+        if self.samples < 2:
+            self.duration = 0
         if self.duration is None:
             self.duration = (self.samples - 1) * self.time_step
+
+
+    def _validate(self):
+        """
+        Validate input parameters.
+        """
+
+        if len(self.trace) < 2:
+            raise ValueError('Trace must have at least 2 samples.')
+
+        if self.sample_rate <= 0:
+            raise ValueError('Sample_rate must be a non-negative integer.')
+
+        if self.units not in ['A', 'mA', 'uA', 'μA', 'nA', 'pA', 'fA', 'zA']:
+            warn(f'Crazy units detected: {self.units}.')
+
+        if not (0.99 < self.sample_rate * self.time_step < 1.01):
+            raise ValueError('Sample_rate and time_step mismatch.')
+
+        if self.samples != self.trace.shape[0]:
+            raise ValueError('Samples must be the trace length.')
+
+        if (self.samples - 1) * self.time_step != self.duration:
+            raise ValueError('Duration and trace/sample_rate mismatch.')
 
 
     def get_time_vector(self) -> ndarray:
@@ -75,19 +109,8 @@ class Trace:
         return self.time_step * arange(self.samples)
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the Trace object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the Trace object.
-        """
-
-        return asdict(self)
-
-
 @dataclass(slots=True)
-class Events:
+class Events(BaseDataclass):
     """
     A dataclass to represent a collection of events.
 
@@ -102,15 +125,15 @@ class Events:
 
     label: str
     events: dict[int, dict[str, Any]] = field(default_factory=dict)
-    feature_type: str = field(default='Full')
-    _ids: set[int] = field(default_factory=set, init=False, repr=False)
-    _schema: Optional[set[str]] = field(default=None, init=False, repr=False)
-    _req_keys: set[str] = field(default_factory=lambda: {'ID', 'Coordinates', 'Vector', 'Direction'}, init=False, repr=False)
+    feature_type: str = field(default='full')
+    _ids: set[int] = field(default_factory=set, init=False)
+    _schema: Optional[set[str]] = field(default=None, init=False)
+    _req_keys: set[str] = field(default_factory=lambda: {'ID', 'Coordinates', 'Vector', 'Direction'}, init=False)
 
 
-    def __post_init__(self):
+    def _validate(self):
         """
-        Post initialisation check
+        Validate input parameters.
         """
 
         if not self.events:
@@ -190,12 +213,12 @@ class Events:
             raise ValueError("Each event must be a dictionary.")
         keys = set(event.keys())
         if not self._req_keys.issubset(keys):
-            raise ValueError(f"Key requirement mismatch.\nExpected: {sorted(self._req_keys)}\nReceived: {sorted(keys)}")
+            raise ValueError(f"Key requirement mismatch.\nExpected: {sorted(self._req_keys)}\nReceived: {sorted(keys)}.")
 
         if self._schema is None:
             self._schema = keys
         elif keys != self._schema:
-            raise ValueError(f"Event schema mismatch.\nExpected: {sorted(self._schema)}\nReceived: {sorted(keys)}")
+            raise ValueError(f"Event schema mismatch.\nExpected: {sorted(self._schema)}\nReceived: {sorted(keys)}.")
 
         if check_id:
             if event.get('ID') in self._ids:
@@ -269,7 +292,7 @@ class Events:
             try:
                 events = [e for e in events if filter_fn(e)]
             except Exception as e:
-                raise ValueError(f"Filter function raised an error: {e}")
+                raise ValueError(f"Filter function raised an error: {e}.")
 
         return [e.get(key) for e in events]
 
@@ -305,7 +328,7 @@ class Events:
         """
 
         if key == 'ID':
-            raise ValueError("Cannot add feature with key 'ID'")
+            raise ValueError("Cannot add feature with key 'ID'.")
         if len(self.events) != len(value):
             raise ValueError("Length of feature values must match number of events.")
         if self._schema and key in self._schema:
@@ -331,57 +354,124 @@ class Events:
             self.add_feature(key, values)
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the Events object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the Events object.
-        """
-
-        return asdict(self)
-
-
 """
 NotNormal results
 """
 
 @dataclass(slots=True)
-class InitialEstimateArgs:
+class InitialEstimateArgs(BaseDataclass):
     """
     A dataclass to represent the parameters for initial estimation. See: notnormal.extract.methods.initial_estimate.
     """
 
+    trace: ndarray | Trace = field(metadata={"serialise": False}, repr=False)
+    filtered_trace: Optional[ndarray] = field(metadata={"serialise": False}, repr=False)
     sample_rate: Optional[int]
-    estimate_cutoff: float
+    cutoff: float
     replace_factor: float
     replace_gap: float
     threshold_window: float
     z_score: Optional[float]
     output_features: Optional[str]
     vector_results: bool
-    _validate: bool
+    parallel: bool
+    segment_size: Optional[int]
 
 
-    def to_dict(self) -> dict[str, Any]:
+    def _normalise(self):
         """
-        Convert the InitialEstimateArgs object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the InitialEstimateArgs object.
+        Normalise input parameters.
         """
 
-        return asdict(self)
+        # Trace or ndarray input
+        if isinstance(self.trace, Trace):
+            self.sample_rate, self.trace = self.trace.sample_rate, self.trace.trace
+        else:
+            # Ensure safety
+            self.trace = asarray(self.trace, dtype=float)
+            if (not self.trace.flags['C_CONTIGUOUS']) or (not self.trace.flags['OWNDATA']):
+                self.trace = self.trace.copy(order='C')
+
+        # Use the normal trace if no bounding trace is supplied
+        if self.filtered_trace is None:
+            self.filtered_trace = self.trace
+        else:
+            # Ensure safety
+            self.filtered_trace = asarray(self.filtered_trace, dtype=float)
+            if (not self.filtered_trace.flags['C_CONTIGUOUS']) or (not self.filtered_trace.flags['OWNDATA']):
+                self.filtered_trace = self.filtered_trace.copy(order='C')
+
+        # Default to 1 expected outlier per trace (computed on length, of course)
+        if self.z_score is None:
+            self.z_score = float(norm.ppf(1.0 - ((1.0 / len(self.trace)) / 2.0)))
+
+
+    def _validate(self):
+        """
+        Validate input parameters.
+        """
+
+        if self.trace.shape[0] < 2:
+            raise ValueError('Trace must have at least 2 samples.')
+
+        if self.trace.shape != self.filtered_trace.shape:
+            raise ValueError("Trace and filtered_trace must have the same shape.")
+
+        if self.sample_rate is None:
+            raise ValueError("Sample_rate must be provided if trace is a ndarray.")
+
+        if self.sample_rate <= 0:
+            raise ValueError('Sample_rate must be a non-negative integer.')
+
+        if not (0 < self.cutoff <= self.sample_rate // 2):
+            raise ValueError("Cutoff frequency must be between 0 and sample_rate // 2.")
+
+        if self.replace_gap < 0 or self.replace_factor < 0:
+            raise ValueError("Replace_factor and replace_gap must be non-negative.")
+
+        if self.replace_factor == 0 and self.replace_gap > 0:
+            raise ValueError("Replace-factor cannot be 0 if replace_gap is greater than 0.")
+
+        if self.threshold_window <= 0:
+            raise ValueError("Threshold window must be greater than 0.")
+
+        if int(self.threshold_window * self.sample_rate) > self.trace.shape[0]:
+            raise ValueError("Threshold window cannot be greater than the length of trace.")
+
+        if self.z_score <= 0:
+            raise ValueError("Z_score must be greater than 0.")
+
+        if self.output_features is not None and self.output_features not in ['full', 'FWHM', 'FWQM']:
+            raise ValueError("Output_features must be 'full', 'FWHM', or 'FWQM'.")
+
+        if self.segment_size is not None and (self.segment_size <= 0 or self.segment_size > self.trace.shape[0]):
+            raise ValueError("Segment_size must be greater than 0 and smaller than the length of trace.")
+
+
+    def get_func_args(self) -> tuple[ndarray, ndarray, dict[str, any], dict[str, any], dict[str, any]]:
+        """
+        Package and return arguments for _baseline_threshold and _locate_replace
+        """
+
+        bl_args = {'cutoff': self.cutoff, 'sample_rate': self.sample_rate, 'z_score': self.z_score,
+                   'threshold_window': int(self.threshold_window * self.sample_rate)}
+        lr_args = {'replace_factor': self.replace_factor, 'replace_gap': self.replace_gap}
+        gen_args = {'output_features': self.output_features, 'vector_results': self.vector_results,
+                    'parallel': self.parallel, 'segment_size': self.segment_size}
+
+        return self.trace, self.filtered_trace, bl_args, lr_args, gen_args
 
 
 @dataclass(slots=True)
-class IterateArgs:
+class IterateArgs(BaseDataclass):
     """
     A dataclass to represent the parameters for initial estimation. See: notnormal.extract.methods.iterate.
     """
 
+    trace : ndarray | Trace = field(metadata={"serialise": False}, repr=False)
     cutoff: float
     event_direction: str
+    filtered_trace: Optional[ndarray] = field(metadata={"serialise": False}, repr=False)
     sample_rate: Optional[int]
     replace_factor: float
     replace_gap: float
@@ -389,22 +479,100 @@ class IterateArgs:
     z_score: Optional[float]
     output_features: Optional[str]
     vector_results: bool
-    _validate: bool
+    parallel: bool
+    segment_size: Optional[int]
 
 
-    def to_dict(self) -> dict[str, Any]:
+    def _normalise(self):
         """
-        Convert the IterateArgs object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the IterateArgs object.
+        Normalise input parameters.
         """
 
-        return asdict(self)
+        # Trace or ndarray input
+        if isinstance(self.trace, Trace):
+            self.sample_rate, self.trace = self.trace.sample_rate, self.trace.trace
+        else:
+            # Ensure safety
+            self.trace = asarray(self.trace, dtype=float)
+            if (not self.trace.flags['C_CONTIGUOUS']) or (not self.trace.flags['OWNDATA']):
+                self.trace = self.trace.copy(order='C')
+
+        # Use the normal trace if no bounding trace is supplied
+        if self.filtered_trace is None:
+            self.filtered_trace = self.trace
+        else:
+            # Ensure safety
+            self.filtered_trace = asarray(self.filtered_trace, dtype=float)
+            if (not self.filtered_trace.flags['C_CONTIGUOUS']) or (not self.filtered_trace.flags['OWNDATA']):
+                self.filtered_trace = self.filtered_trace.copy(order='C')
+
+        # Default to 1 expected outlier per trace (computed on length, of course)
+        if self.z_score is None:
+            self.z_score = float(norm.ppf(1.0 - ((1.0 / len(self.trace)) / 2.0)))
+
+
+    def _validate(self):
+        """
+        Validate input parameters.
+        """
+
+        if self.trace.shape[0] < 2:
+            raise ValueError('Trace must have at least 2 samples.')
+
+        if self.trace.shape != self.filtered_trace.shape:
+            raise ValueError("Trace and filtered_trace must have the same shape.")
+
+        if self.sample_rate is None:
+            raise ValueError("Sample_rate must be provided if trace is a ndarray.")
+
+        if self.sample_rate <= 0:
+            raise ValueError('Sample_rate must be a non-negative integer.')
+
+        if not (0 < self.cutoff <= self.sample_rate // 2):
+            raise ValueError("Cutoff frequency must be between 0 and sample_rate // 2.")
+
+        if self.event_direction not in ['up', 'down', 'biphasic']:
+            raise ValueError("Event_direction must be 'up', 'down', or 'biphasic'.")
+
+        if self.replace_gap < 0 or self.replace_factor < 0:
+            raise ValueError("Replace_factor and replace_gap must be non-negative.")
+
+        if self.replace_factor == 0 and self.replace_gap > 0:
+            raise ValueError("Replace-factor cannot be 0 if replace_gap is greater than 0.")
+
+        if self.threshold_window <= 0:
+            raise ValueError("Threshold window must be greater than 0.")
+
+        if int(self.threshold_window * self.sample_rate) > self.trace.shape[0]:
+            raise ValueError("Threshold window cannot be greater than the length of trace.")
+
+        if self.z_score <= 0:
+            raise ValueError("Z_score must be greater than 0.")
+
+        if self.output_features is not None and self.output_features not in ['full', 'FWHM', 'FWQM']:
+            raise ValueError("Output_features must be 'full', 'FWHM', or 'FWQM'.")
+
+        if self.segment_size is not None and (self.segment_size <= 0 or self.segment_size > self.trace.shape[0]):
+            raise ValueError("Segment_size must be greater than 0 and smaller than the length of trace.")
+
+
+    def get_func_args(self) -> tuple[ndarray, ndarray, dict[str, any], dict[str, any], dict[str, any]]:
+        """
+        Package and return arguments for _baseline_threshold and _locate_replace
+        """
+
+        bl_args = {'cutoff': self.cutoff, 'sample_rate': self.sample_rate, 'z_score': self.z_score,
+                   'threshold_window': int(self.threshold_window * self.sample_rate)}
+        lr_args = {'event_direction': self.event_direction, 'replace_factor': self.replace_factor,
+                   'replace_gap': self.replace_gap}
+        gen_args = {'output_features': self.output_features, 'vector_results': self.vector_results,
+                    'parallel': self.parallel, 'segment_size': self.segment_size}
+
+        return self.trace, self.filtered_trace, bl_args, lr_args, gen_args
 
 
 @dataclass
-class Iteration:
+class Iteration(BaseDataclass):
     """
     A dataclass to represent an iteration of event detection and baseline determination.
 
@@ -424,75 +592,46 @@ class Iteration:
     event_coordinates: Optional[ndarray] = None
     event_stats: Optional[dict[str, float | int]] = None
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the Iteration object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the Iteration object.
-        """
-        return asdict(self)
-
 
 @dataclass(slots=True)
-class InitialEstimateResults:
+class InitialEstimateResults(BaseDataclass):
     """
     A dataclass that represents the results of initial estimation on the trace.
 
     Attributes:
-        args (InitialEstimateArgs): The arguments used for initial estimation.
+        args (InitialEstimateArgs | None): The arguments used for initial estimation. Default is None.
         event_direction (str | None): The estimated event direction, either 'up' or 'down'. Default is None.
         max_cutoff (float | None): The estimated maximum cutoff that can be used for iteration. Default is None.
         initial_threshold (ndarray | None): The initial threshold from event detection. Default is None.
-        events (Events): The final detected events. Default is None.
-        iterations (list[Iteration2]): A list of Iteration2 objects representing each iteration. Default is an empty list.
+        events (Events | None): The final detected events. Default is None.
+        iterations (list[Iteration] | None): A list of Iteration objects representing each iteration. Default is None.
     """
 
-    args: InitialEstimateArgs
+    args: Optional[InitialEstimateArgs] = None
     event_direction: Optional[str] = None
     max_cutoff: Optional[float] = None
     initial_threshold: Optional[ndarray] = None
     events: Optional[Events] = None
-    iterations: list[Iteration] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the InitialEstimateResults object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the InitialEstimateResults object.
-        """
-
-        return asdict(self)
+    iterations: Optional[list[Iteration]] = None
 
 
 @dataclass(slots=True)
-class IterateResults:
+class IterateResults(BaseDataclass):
     """
     A dataclass that represents the results of iteration on the trace.
 
     Attributes:
-        args (IterateArgs): The arguments used for iteration.
+        args (IterateArgs | None): The arguments used for iteration. Default is None.
         initial_threshold (ndarray | None): The initial threshold from event detection. Default is None.
-        events (Events): The final detected events. Default is None.
-        iterations (list[Iteration2]): A list of Iteration2 objects representing each iteration. Default is an empty list.
+        events (Events | None): The final detected events. Default is None.
+        iterations (list[Iteration] | None): A list of Iteration objects representing each iteration. Default is None.
 
     """
 
-    args: IterateArgs
+    args: Optional[IterateArgs] = None
     initial_threshold: Optional[ndarray] = None
     events: Optional[Events] = None
-    iterations: list[Iteration] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the IterateResults object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the IterateResults object.
-        """
-
-        return asdict(self)
+    iterations: Optional[list[Iteration]] = None
 
 
 """
@@ -500,11 +639,13 @@ Wavelet filter results
 """
 
 @dataclass(slots=True)
-class WaveletFilterArgs:
+class WaveletFilterArgs(BaseDataclass):
     """
     A dataclass to represent the parameters for wavelet filtering. See: notnormal.filter.methods.wavelet_filter.
     """
 
+    trace: ndarray | Trace = field(metadata={"serialise": False}, repr=False)
+    events: Events = field(metadata={"serialise": False}, repr=False)
     wavelet: str
     u_length: int
     p_length: int
@@ -514,55 +655,82 @@ class WaveletFilterArgs:
     full_results: bool
     verbose: bool
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the WaveletFilterArgs object to a dictionary representation.
 
-        Returns:
-            dict[str, Any]: A dictionary representation of the WaveletFilterArgs object.
+    def _normalise(self):
+        """
+        Normalise input parameters.
         """
 
-        return asdict(self)
+        # Trace or ndarray input
+        if isinstance(self.trace, Trace):
+            self.trace = self.trace.trace
+        else:
+            # Ensure safety
+            self.trace = asarray(self.trace, dtype=float)
+            if (not self.trace.flags['C_CONTIGUOUS']) or (not self.trace.flags['OWNDATA']):
+                self.trace = self.trace.copy(order='C')
+
+
+    def _validate(self):
+        """
+        Validate input parameters.
+        """
+
+        if self.trace.shape[0] < 2:
+            raise ValueError('Trace must have at least 2 samples.')
+
+        if len(self.events) < 2:
+            raise ValueError('Events must have at least 2 events.')
+
+        if self.wavelet not in ('haar', 'db2', 'db4', 'db6', 'db8', 'sym2', 'sym4', 'sym6', 'sym8', 'coif1',
+                                'coif3', 'coif5', 'bior1.3', 'bior2.2', 'bior3.5', 'bior4.4', 'rbio1.3', 'rbio2.2',
+                                'rbio3.5', 'rbio4.4'):
+            raise ValueError('Wavelet must be supported by PyWavelets.')
+
+        if self.u_length < 1 or (self.u_length % 2 and self.u_length != 1):
+            raise ValueError("u_length must be a power of two (including 1).")
+
+        if self.p_length < 1 or (self.p_length % 2 and self.p_length != 1):
+            raise ValueError("p_length must be a power of two (including 1).")
+
+        if not (0 <= self.q_pop <= 1):
+            raise ValueError("q_pop must be in the range [0, 1].")
+
+        if not (0 < self.q_thresh < 1):
+            raise ValueError("q_thresh must be in the range (0, 1).")
+
+        if self.mode not in ('soft', 'hard', 'garrote', 'greater', 'less'):
+            raise ValueError("mode must be either 'soft', 'hard', 'garrote', 'greater', or 'less'.")
 
 
 @dataclass(slots=True)
-class WaveletFilterResults:
+class WaveletFilterResults(BaseDataclass):
     """
     A dataclass that represents the results of a wavelet filter applied to a trace.
 
     Attributes:
-        args (WaveletFilterArgs): The arguments used for filtering.
-        filtered_trace (ndarray): The filtered trace.
-        max_level (int): The calculated maximum level of decomposition.
-        lengths (ndarray): The event lengths used for maximum level calculation.
-        signal_vars (ndarray): The estimated signal variance for each band.
-        noise_vars (ndarray): The estimated noise variance for each band.
-        thresholds (list[float]): The calculated threshold for each band. Default is None.
+        args (WaveletFilterArgs | None): The arguments used for filtering. Default is None.
+        filtered_trace (ndarray | None): The filtered trace. Default is None.
+        max_level (int | None): The calculated maximum level of decomposition. Default is None.
+        lengths (ndarray | None): The event lengths used for maximum level calculation. Default is None.
+        signal_vars (ndarray | None): The estimated signal variance for each band. Default is None.
+        noise_vars (ndarray | None): The estimated noise variance for each band. Default is None.
+        thresholds (list[float] | None): The calculated threshold for each band. Default is None.
         coeffs (list[ndarray] | None): The wavelet coefficients for the trace. Default is None.
         coeffs_mask (list[ndarray] | None): The wavelet coefficients for the event mask. Default is None.
         filtered_coeffs (list[ndarray] | None): The filtered wavelet coefficients for the trace. Default is None.
     """
 
-    args: WaveletFilterArgs
-    filtered_trace: ndarray
-    max_level: int
-    lengths: ndarray
-    signal_vars: ndarray
-    noise_vars: ndarray
-    thresholds: list[float]
+    args: Optional[WaveletFilterArgs] = None
+    filtered_trace: Optional[ndarray] = None
+    max_level: Optional[int] = None
+    lengths: Optional[ndarray] = None
+    signal_vars: Optional[ndarray] = None
+    noise_vars: Optional[ndarray] = None
+    thresholds: Optional[list[float]] = None
     coeffs: Optional[list[ndarray]] = None
     coeffs_mask: Optional[list[ndarray]] = None
     filtered_coeffs: Optional[list[ndarray]] = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the WaveletFilterResults object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the WaveletFilterResults object.
-        """
-
-        return asdict(self)
 
 
 """
@@ -570,11 +738,12 @@ Event clustering/reconstruction/augmentation results
 """
 
 @dataclass(slots=True)
-class ShapeClusterArgs:
+class ShapeClusterArgs(BaseDataclass):
     """
     A dataclass to represent the parameters for shape clustering. See: notnormal.reconstruct.events.shape_cluster.
     """
 
+    vectors: list[ndarray] | ndarray | Events = field(metadata={"serialise": False}, repr=False)
     k: int | list[int]
     direction: Optional[str]
     n_components: int
@@ -594,23 +763,13 @@ class ShapeClusterArgs:
     verbose: bool
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the ShapeClusteringArgs object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the ShapeClusteringArgs object.
-        """
-
-        return asdict(self)
-
-
 @dataclass(slots=True)
-class EventAugmentationArgs:
+class EventAugmentationArgs(BaseDataclass):
     """
     A dataclass to represent the parameters for event augmentation. See: notnormal.reconstruct.events.augment_clusters.
     """
 
+    clusters: ShapeClusters = field(metadata={"serialise": False}, repr=False)
     n_vectors: Optional[int]
     max_k: int
     weight: float
@@ -621,19 +780,8 @@ class EventAugmentationArgs:
     verbose: bool
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the EventAugmentationArgs object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the EventAugmentationArgs object.
-        """
-
-        return asdict(self)
-
-
 @dataclass(slots=True)
-class ShapeCluster:
+class ShapeCluster(BaseDataclass):
     """
     A dataclass to represent a single cluster of event vectors.
 
@@ -666,19 +814,8 @@ class ShapeCluster:
     augmented: Optional[list[ndarray]] = None
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the Cluster object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the Cluster object.
-        """
-
-        return asdict(self)
-
-
 @dataclass(slots=True)
-class ShapeClusters:
+class ShapeClusters(BaseDataclass):
     """
     A dataclass to represent the output of shape clustering, possibly including reconstruction and augmentation.
 
@@ -798,25 +935,14 @@ class ShapeClusters:
         return self.clusters[cluster_id].augmented if 0 <= cluster_id < len(self.clusters) else []
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the ShapeClusters object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the ShapeClusters object.
-        """
-
-        return asdict(self)
-
-
 @dataclass(slots=True)
-class ShapeClusterResults:
+class ShapeClusterResults(BaseDataclass):
     """
     A dataclass to represent the results of shape clustering.
 
     Attributes:
-        args (ShapeClusterArgs): The arguments used for clustering.
-        fits (dict[int, ShapeClusters]): All clustering results keyed by the number of clusters.
+        args (ShapeClusterArgs | None): The arguments used for clustering. Default is None.
+        fits (dict[int, ShapeClusters] | None): All clustering results keyed by the number of clusters. Default is None.
         area_norm (ndarray | None): Globally area + length normalised event vectors. Default is None.
         length_norm (ndarray | None): Globally length normalised event vectors. Default is None.
         transform (ndarray | None): Globally transformed + normalised event vectors. Default is None.
@@ -826,8 +952,8 @@ class ShapeClusterResults:
         knees (dict[str, ndarray] | None): The knee points for the clustering results. Default is None.
     """
 
-    args: ShapeClusterArgs
-    fits: dict[int, ShapeClusters]
+    args: Optional[ShapeClusterArgs] = None
+    fits: Optional[dict[int, ShapeClusters]] = None
     area_norm: Optional[ndarray] = None
     length_norm: Optional[ndarray] = None
     transform: Optional[ndarray] = None
@@ -837,27 +963,18 @@ class ShapeClusterResults:
     knees: Optional[dict[str, ndarray]] = None
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the ShapeClusterResults object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the ShapeClusterResults object.
-        """
-
-        return asdict(self)
-
-
 """
 Noise reconstruction/augmentation results
 """
 
 @dataclass(slots=True)
-class NoiseReconstructionArgs:
+class NoiseReconstructionArgs(BaseDataclass):
     """
     A dataclass to represent the parameters for noise reconstruction. See: notnormal.reconstruct.noise.reconstruct_noise.
     """
 
+    trace: ndarray | Trace = field(metadata={"serialise": False}, repr=False)
+    event_mask: ndarray | Events = field(metadata={"serialise": False}, repr=False)
     aa_cutoff: int
     aa_order: int
     n_regimes: int | list[int]
@@ -872,19 +989,9 @@ class NoiseReconstructionArgs:
     random_state: Optional[int]
     verbose: bool
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the NoiseReconstructionArgs object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the NoiseReconstructionArgs object.
-        """
-
-        return asdict(self)
-
 
 @dataclass(slots=True)
-class NoiseFitResults:
+class NoiseFitResults(BaseDataclass):
     """
     A dataclass to represent the results of noise fitting.
 
@@ -933,19 +1040,8 @@ class NoiseFitResults:
         return sum(components, axis=0) * self.p_filter, components
 
 
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the NoiseFitResults object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the NoiseFitResults object.
-        """
-
-        return asdict(self)
-
-
 @dataclass(slots=True)
-class NoiseReconstructResults:
+class NoiseReconstructResults(BaseDataclass):
     """
     A dataclass to represent the results of noise reconstruction.
 
@@ -960,14 +1056,3 @@ class NoiseReconstructResults:
     fits: dict[int, NoiseFitResults]
     best_fit: Optional[NoiseFitResults] = None
     loss_curves: Optional[dict[str, tuple[ndarray, ndarray]]] = None
-
-
-    def to_dict(self) -> dict[str, Any]:
-        """
-        Convert the NoiseReconstructionResults object to a dictionary representation.
-
-        Returns:
-            dict[str, Any]: A dictionary representation of the NoiseReconstructionResults object.
-        """
-
-        return asdict(self)

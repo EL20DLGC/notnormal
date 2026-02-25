@@ -67,11 +67,9 @@ def wavelet_filter(
         WaveletFilterResults: An object containing the filtering results.
     """
 
-    if isinstance(trace, Trace):
-        trace = trace.trace
-
-    # Get args
+    # Init args
     args = WaveletFilterArgs(**{k: v for k, v in locals().items() if k in WaveletFilterArgs.__annotations__})
+    trace = args.trace
 
     # Configure progress bar
     with (tqdm(total=1, desc='Computing event mask and decomposition level', bar_format=_BAR_FORMAT, disable=not verbose)
@@ -85,12 +83,12 @@ def wavelet_filter(
 
     with tqdm(total=1, desc='Decomposing trace', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
         # Decompose the trace using partial MOSWT
-        coeffs = partial_moswt(trace, wavelet, max_level, u_length=u_length, p_length=p_length)
+        coeffs = partial_moswt(trace, wavelet, max_level, len(trace), u_length=u_length, p_length=p_length)
         progress.update(1)
 
     with tqdm(total=1, desc='Decomposing event mask', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
         # Decompose the event mask using partial MOSWT
-        coeffs_mask = partial_moswt(event_mask, wavelet, max_level, u_length=u_length, p_length=p_length)
+        coeffs_mask = partial_moswt(event_mask, wavelet, max_level, len(trace), u_length=u_length, p_length=p_length)
         progress.update(1)
 
     with tqdm(total=1, desc='Computing SNR', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
@@ -110,7 +108,8 @@ def wavelet_filter(
 
     with tqdm(total=1, desc='Reconstructing trace', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
         # Inverse partial MOSWT to get the filtered trace
-        filtered_trace = inverse_partial_moswt(filtered_coeffs, wavelet, max_level, u_length=u_length, p_length=p_length)
+        filtered_trace = inverse_partial_moswt(filtered_coeffs, wavelet, max_level, len(trace), u_length=u_length,
+                                               p_length=p_length)
         progress.update(1)
 
     # Create results object
@@ -127,6 +126,7 @@ def partial_moswt(
     trace: ndarray | Trace,
     wavelet: str,
     max_level: int,
+    length: int,
     u_length: int = 2,
     p_length: int = 2
 ) -> list[ndarray]:
@@ -137,6 +137,7 @@ def partial_moswt(
         trace (ndarray): The trace to be decomposed or a Trace object.
         wavelet (str): The wavelet to use for decomposition, see pywavelets documentation for available wavelets.
         max_level (int): The maximum level of decomposition.
+        length (int): The length of the trace to be decomposed.
         u_length (int): Number of splits for the ultimate level (must be 2^N). Default is 2.
         p_length (int): Number of splits for the penultimate level (must be 2^N). Default is 2.
 
@@ -151,7 +152,7 @@ def partial_moswt(
     pad_level = int(maximum(max_level + u_length, max_level + p_length - 1))
 
     # Pad the trace to allow decomposition
-    padded_trace = _moswt_pad(trace, pad_level)
+    padded_trace = _moswt_pad(trace, pad_level, length)
 
     # Compute MOSWT down to max level with splits, return cAn, cDn, ..., cD1
     coeffs = _partial_moswt(padded_trace, wavelet, max_level, u_length, p_length)
@@ -164,6 +165,7 @@ def inverse_partial_moswt(
     coeffs: list[ndarray],
     wavelet: str,
     max_level: int,
+    length: int,
     u_length: int = 2,
     p_length: int = 2
 ) -> ndarray:
@@ -174,6 +176,7 @@ def inverse_partial_moswt(
         coeffs (list[ndarray]): The partial MOSWT coefficients, in the form [cAn, cDn, ..., cD1].
         wavelet (str): The wavelet used for decomposition.
         max_level (int): The maximum level used for decomposition.
+        length (int): The length of the trace that was decomposed.
         u_length (int): Number of decomposition splits used for the ultimate level (must be 2^N). Default is 2.
         p_length (int): Number of decomposition splits used for the penultimate level (must be 2^N). Default is 2.
 
@@ -188,7 +191,7 @@ def inverse_partial_moswt(
     pad_level = int(maximum(max_level + u_length, max_level + p_length - 1))
 
     # Unpad the inversed trace
-    inversed = _moswt_unpad(inversed, pad_level)
+    inversed = _moswt_unpad(inversed, pad_level, length)
 
     # Return the inverse
     return inversed
@@ -227,13 +230,14 @@ def _compute_max_level(coordinates: list[tuple[int, int]], q_pop: float = 0.5) -
     return max_level, lengths
 
 
-def _moswt_pad(trace: ndarray, max_level: int) -> ndarray:
+def _moswt_pad(trace: ndarray, max_level: int, length: int) -> ndarray:
     """
     Pad the trace to the next power of two for partial MOSWT.
 
     Args:
         trace (ndarray): The trace to be padded.
         max_level (int): The maximum level of decomposition (including further tree-like decompositions).
+        length (int): The length of the trace to be padded.
 
     Returns:
         ndarray: The padded trace.
@@ -243,22 +247,25 @@ def _moswt_pad(trace: ndarray, max_level: int) -> ndarray:
         raise ValueError("Trace is empty. Cannot perform padding.")
     if max_level < 0:
         raise ValueError("Max level must be a non-negative integer.")
+    if length != len(trace):
+        raise ValueError("Length of trace must be equal to length of trace.")
 
     # Required padding: N_pad = (2 ** j) * ceil[N / (2 ** j)] - N
-    pad_len = int((2 ** max_level) * ceil(len(trace) / (2 ** max_level)) - len(trace))
+    pad_len = int((2 ** max_level) * ceil(length / (2 ** max_level)) - length)
     if pad_len == 0:
         return trace
     padded = pad(trace, (0, pad_len), mode='symmetric')
     return padded
 
 
-def _moswt_unpad(trace: ndarray, max_level: int) -> ndarray:
+def _moswt_unpad(trace: ndarray, max_level: int, length: int) -> ndarray:
     """
     Unpad the trace after inverse partial MOSWT (padding calculated implicitly from max level).
 
     Args:
         trace (ndarray): The trace after inverse partial MOSWT.
         max_level (int): The maximum level used in decomposition (including further tree-like decompositions).
+        length (int): The length of the trace that was originally padded (before decomposition).
 
     Returns:
         ndarray: The unpadded trace.
@@ -268,9 +275,11 @@ def _moswt_unpad(trace: ndarray, max_level: int) -> ndarray:
         raise ValueError("Trace is empty. Cannot perform unpadding.")
     if max_level < 0:
         raise ValueError("Max level must be a non-negative integer.")
+    if length > len(trace):
+        raise ValueError("Length of the original trace cannot be larger than inverse.")
 
     # Required padding: N_pad = (2 ** j) * ceil[N / (2 ** j)] - N
-    pad_len = int((2 ** max_level) * ceil(len(trace) / (2 ** max_level)) - len(trace))
+    pad_len = int((2 ** max_level) * ceil(length / (2 ** max_level)) - length)
     if pad_len == 0:
         return trace
 

@@ -60,20 +60,19 @@ def load_trace(path: str, label: Optional[str] = None) -> Trace:
     else:
         raise ValueError(f"Unsupported file extension '{ext}' for '{path}'.")
 
+    # Quick check before comp
+    if len(time_vector) != len(trace):
+        raise ValueError("Trace and time_vector must have the same length.")
     if len(time_vector) < 2:
-        raise ValueError("Trace must have at least two time points.")
-
-    # Ensure safety
-    trace = asarray(trace, dtype=float)
-    if (not trace.flags['C_CONTIGUOUS']) or (not trace.flags['OWNDATA']):
-        trace = trace.copy(order='C')
+        raise ValueError("Time_vector must have at least 2 elements.")
 
     # Convert to Trace obj
     trace = Trace(
         label=label if label else path_obj.stem,
         trace=trace,
         sample_rate=int(round(1.0 / (time_vector[1] - time_vector[0]))),
-        units=units
+        units=units,
+        path=path
     )
 
     return trace
