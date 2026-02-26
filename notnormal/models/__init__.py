@@ -4,8 +4,10 @@
 # Auto-generated __init__.py file.
 
 from .base import Trace, Events, InitialEstimateArgs, IterateArgs, Iteration, InitialEstimateResults, IterateResults, WaveletFilterArgs, WaveletFilterResults, ShapeClusterArgs, EventAugmentationArgs, ShapeCluster, ShapeClusters, ShapeClusterResults, NoiseReconstructionArgs, NoiseFitResults, NoiseReconstructResults
+from .supers import BaseDataclass
 
 __all__ = [
+    "BaseDataclass",
     "EventAugmentationArgs",
     "Events",
     "InitialEstimateArgs",

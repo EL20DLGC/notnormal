@@ -8,6 +8,11 @@ from Cython.Build import cythonize
 Auto-generator for Cython extensions
 """
 
+EXCLUDED_SUBPACKAGES = {
+    "notnormal.gui.mku",
+}
+
+
 def uses_cython(file: Path) -> bool:
     try:
         tree = ast.parse(file.read_text(encoding="utf-8"))
@@ -28,8 +33,11 @@ def discover_extensions():
     for pyfile in Path("notnormal").rglob("*.py"):
         if pyfile.name == "__init__.py":
             continue
+        modname = ".".join(pyfile.relative_to(".").with_suffix("").parts)
+        # Exclude specific subpackages
+        if any(modname.startswith(pkg) for pkg in EXCLUDED_SUBPACKAGES):
+            continue
         if uses_cython(pyfile):
-            modname = ".".join(pyfile.relative_to(".").with_suffix("").parts)
             extensions.append((modname, str(pyfile)))
     return extensions
 

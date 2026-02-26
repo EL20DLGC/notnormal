@@ -144,9 +144,8 @@ def initial_estimate(
     else:
         results.iterations, results.initial_threshold, results.event_direction = _serial_estimate(*args)
 
-
     # (4) Calculate the required cutoffs (using the initial threshold)
-    final = results.iterations[-1]
+    final = results.iterations[len(results.iterations) - 1]
     final.event_stats['Max Cutoff'], all_cutoffs = _calculate_cutoffs(args[0], final.baseline, results.initial_threshold,
                                                       final.event_coordinates, args[2]['cutoff'], args[2]['sample_rate'])
     results.max_cutoff = final.event_stats['Max Cutoff']
@@ -235,7 +234,7 @@ def iterate(
 
     # If events are requested
     if output_features is not None:
-        final = results.iterations[-1]
+        final = results.iterations[len(results.iterations) - 1]
 
         # Extract the events
         results.events = simple_extractor(args[0], final.baseline, final.event_coordinates, args[2]['sample_rate'],

@@ -3032,7 +3032,7 @@ class NotNormalGUI(tk.Tk):
         self.filtered_trace = nn.methods._bounds_filter(self.trace, self.analysis_options['_bounds_filter'].get())
 
         # Estimate the cutoff and direction
-        def worker(results, errors,  *args):
+        def worker(results, errors, *args):
             try:
                 results.put(nn.initial_estimate(*args))
             except Exception as e:
@@ -3079,10 +3079,7 @@ class NotNormalGUI(tk.Tk):
         # Iterate to find the final baseline and threshold
         def worker(results, errors, *args):
             try:
-                if self.analysis_options['parallel'].get():
-                    results.put(nn.parallel_iterate(*args))
-                else:
-                    results.put(nn.iterate(*args))
+                results.put(nn.iterate(*args))
             except Exception as e:
                 errors.put(str(e))
                 return
@@ -3104,7 +3101,9 @@ class NotNormalGUI(tk.Tk):
                 self.analysis_options['replace_gap'].get(),
                 self.analysis_options['threshold_window'].get(),
                 self.analysis_options['z_score'].get(),
-                self.analysis_options['features'].get()
+                self.analysis_options['features'].get(),
+                False,
+                self.analysis_options['parallel'].get()
             ),
             daemon=True
         )
