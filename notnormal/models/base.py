@@ -1,4 +1,4 @@
-# Copyright (C) 2025 Dylan Charnock <el20dlgc@leeds.ac.uk>
+# Copyright (C) 2025-2026 Dylan Charnock <el20dlgc@leeds.ac.uk>
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
@@ -622,13 +622,14 @@ class IterateResults(BaseDataclass):
 
     Attributes:
         args (IterateArgs | None): The arguments used for iteration. Default is None.
+        max_cutoff (float | None): The estimated maximum cutoff that can be used for iteration. Default is None.
         initial_threshold (ndarray | None): The initial threshold from event detection. Default is None.
         events (Events | None): The final detected events. Default is None.
         iterations (list[Iteration] | None): A list of Iteration objects representing each iteration. Default is None.
-
     """
 
     args: Optional[IterateArgs] = None
+    max_cutoff: Optional[float] = None
     initial_threshold: Optional[ndarray] = None
     events: Optional[Events] = None
     iterations: Optional[list[Iteration]] = None
