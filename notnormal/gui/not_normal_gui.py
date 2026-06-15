@@ -1165,7 +1165,9 @@ class NotNormalGUI(tk.Tk):
 
         # Matplotlib
         mplstyle.use('fast')
-        rc('font', size=_SMALL_FONT, family='sans-serif')
+        rc('text', usetex=False, hinting='force_autohint', hinting_factor=8)
+        rc('mathtext', fontset='dejavusans', default='it')
+        rc('font', size=_SMALL_FONT, family='sans-serif', **{'sans-serif': ['DejaVu Sans']})
         rc('figure', dpi=float(self.winfo_fpixels('1i')))
         rc('grid', color='0.8', linewidth=0.5)
         rc('path', simplify=True, simplify_threshold=0.111111111111)
