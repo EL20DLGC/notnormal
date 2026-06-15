@@ -261,11 +261,11 @@ def simple_extractor(
     if isinstance(trace, Trace):
         label, sample_rate, trace = trace.label, trace.sample_rate, trace.trace
     if sample_rate is None:
-        raise ValueError("Sample rate must be provided if trace is a ndarray.")
+        raise ValueError("Sample_rate must be provided if trace is a ndarray.")
     if trace.shape != baseline.shape:
         raise ValueError("Trace and baseline must have the same shape.")
     if feature_type not in ('full', 'FWHM', 'FWQM'):
-        raise ValueError("Feature type must be 'full', 'FWHM', or 'FWQM'.")
+        raise ValueError("Feature_type must be 'full', 'FWHM', or 'FWQM'.")
 
     # Early return if no events
     event_number: cython.Py_ssize_t = event_coordinates.shape[0]
@@ -391,7 +391,7 @@ def _parallel_estimate(
 
     # Get the chunks for parallel processing
     chunk_pairs = list(zip(array_split(trace, splits), array_split(filtered_trace, splits)))
-    # Get function (don't extract events, return vector results, or validate)
+    # Get function
     args_list = [(trace_chunk, filtered_trace_chunk, bl_args.copy(), lr_args.copy(), gen_args.copy()) for
                  trace_chunk, filtered_trace_chunk in chunk_pairs]
 
@@ -495,7 +495,7 @@ def _parallel_iterate(
 
     # Get the chunks for parallel processing
     chunk_pairs = list(zip(array_split(trace, splits), array_split(filtered_trace, splits)))
-    # Get function (don't extract events, return vector results, or validate)
+    # Get function
     args_list = [(trace_chunk, filtered_trace_chunk, bl_args.copy(), lr_args.copy(), gen_args.copy()) for
                  trace_chunk, filtered_trace_chunk in chunk_pairs]
 
@@ -988,13 +988,9 @@ def _sort_coordinates(adjusted: ndarray, event_coordinates: cython.longlong[:, :
     for event_id in range(event_number):
         event_start = event_coordinates[event_id, 0]
         event_end = event_coordinates[event_id, 1]
-        event_length = event_end - event_start + 1
 
-        # Find max abs event in the interval
-        max_amp = 0.0
-        for j in range(event_start, event_end + 1):
-            if adj[j] > max_amp:
-                max_amp = adj[j]
+        event_length = event_end - event_start + 1
+        max_amp = max(adj[event_start:event_end + 1])
         scores[event_id] = max_amp * event_length
 
     # Sort the events by score (descending order)
@@ -1133,6 +1129,7 @@ def _baseline_threshold(
             trace statistics if `compute_stats` is True.
     """
 
+    assert trace.shape == calculation_trace.shape
     assert cutoff > 0
     assert sample_rate > 0
     assert z_score > 0
@@ -1143,10 +1140,7 @@ def _baseline_threshold(
     baseline = _baseline_filter(calculation_trace, cutoff, sample_rate)
 
     # Get event mask (view)
-    if event_coordinates is None:
-        event_mask: cython.uchar[::1] = zeros(trace.shape[0], dtype=uint8)
-    else:
-        event_mask: cython.uchar[::1] = __event_mask(event_coordinates, trace.shape[0])
+    event_mask: cython.uchar[::1] = __event_mask(event_coordinates, trace.shape[0])
 
     # Baseline-adjust the traces now to save repeats
     adjusted = trace - baseline
@@ -1181,15 +1175,16 @@ def _baseline_filter(trace: ndarray, cutoff: cython.double, sample_rate: cython.
     length: cython.Py_ssize_t = int(round(sqrt(0.196202 + ((cutoff * (1.0 / sample_rate)) ** 2)) / (cutoff * (1.0 / sample_rate))))
 
     # Make it odd, set as 3 if it is 1, and ensure it is not longer than the trace
+    n: cython.Py_ssize_t = trace.shape[0]
     if length & 1 == 0:
         length += 1
     if length == 1:
         length = 3
-    if length >= trace.shape[0]:
-        length = trace.shape[0] - 1
+    if length > n:
+        length = n if n & 1 else n - 1
 
     # Odd length window
-    dtype = asarray(trace).dtype
+    dtype = trace.dtype
     half: cython.Py_ssize_t = length // 2
     # Add fit for the edge cases
     padded_trace = pad(trace, (half, half), mode="symmetric").astype(dtype, copy=False)
@@ -1231,7 +1226,9 @@ def _thresholder(
 
     # Number of segments to divide the trace into
     length: cython.Py_ssize_t = adjusted.shape[0]
-    segments: cython.Py_ssize_t = maximum(length // window, 1)
+    segments: cython.Py_ssize_t = length // window
+    if segments < 1:
+        segments = 1
 
     # Calculate the threshold in segments
     i: cython.Py_ssize_t = 0
@@ -1243,15 +1240,14 @@ def _thresholder(
     n: cython.Py_ssize_t
     standard_deviation = empty(length, dtype=adjusted.dtype)
     standard_deviation_view: cython.double[::1] = standard_deviation
-    # standard_deviation: cython.double[::1] = empty(length, dtype=adjusted.dtype)
     for i in range(segments):
         start = i * window
         end = (i + 1) * window if i != segments - 1 else length
 
         # Mask events
         data_segment = asarray(adj[start:end])
-        mask_segment = asarray(event_mask[start:end], dtype=bool)
-        current_segment = data_segment[~mask_segment]
+        mask_segment = asarray(event_mask[start:end])
+        current_segment = data_segment[mask_segment == 0]
 
         if current_segment.shape[0] < 2:
             current_segment = data_segment
@@ -1284,7 +1280,7 @@ def _trace_statistics(
     """
 
     # Get the masked adjusted
-    adjusted = adjusted[~asarray(event_mask, dtype=bool)]
+    adjusted = adjusted[asarray(event_mask) == 0]
 
     results = {}
     # The overall Shapiro-Wilk (stopping criterion)
@@ -1402,28 +1398,30 @@ def __event_bounds(
     return column_stack((left[keep], right[keep]))
 
 
-def __event_mask(event_coordinates: ndarray, length: cython.Py_ssize_t) -> cython.uchar[::1]:
+def __event_mask(event_coordinates: Optional[ndarray], length: cython.Py_ssize_t) -> cython.uchar[::1]:
     """
     Function to create a boolean event mask from event coordinates and return a view
 
     Args:
-         event_coordinates (ndarray): The coordinates of detected events.
+         event_coordinates (ndarray | None): The coordinates of detected events.
          length (int): The length of the trace.
 
     Returns:
         ndarray: The boolean event mask.
     """
 
+    # Allocate output
+    event_mask: cython.uchar[::1] = zeros(length, dtype=uint8)
+
+    # No coordinates
+    if event_coordinates is None or event_coordinates.shape[0] == 0:
+        return event_mask
+
     # Get coordinate view
     coordinate_view: cython.longlong[:, ::1] = event_coordinates
 
-    # Allocate output
-    event_mask: cython.uchar[::1] = zeros(length, dtype=uint8)
-    event_number: cython.Py_ssize_t = coordinate_view.shape[0]
-    if event_number == 0:
-        return event_mask
-
     # Fill array
+    event_number: cython.Py_ssize_t = coordinate_view.shape[0]
     event_id: cython.Py_ssize_t = 0
     event_start: cython.Py_ssize_t
     event_end: cython.Py_ssize_t

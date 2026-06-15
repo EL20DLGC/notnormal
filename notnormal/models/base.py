@@ -430,13 +430,13 @@ class InitialEstimateArgs(BaseDataclass):
             raise ValueError("Replace_factor and replace_gap must be non-negative.")
 
         if self.replace_factor == 0 and self.replace_gap > 0:
-            raise ValueError("Replace-factor cannot be 0 if replace_gap is greater than 0.")
+            raise ValueError("Replace_factor cannot be 0 if replace_gap is greater than 0.")
 
         if self.threshold_window <= 0:
-            raise ValueError("Threshold window must be greater than 0.")
+            raise ValueError("Threshold_window must be greater than 0.")
 
         if int(self.threshold_window * self.sample_rate) > self.trace.shape[0]:
-            raise ValueError("Threshold window cannot be greater than the length of trace.")
+            raise ValueError("Threshold_window cannot be greater than the length of trace.")
 
         if self.z_score <= 0:
             raise ValueError("Z_score must be greater than 0.")
@@ -538,13 +538,13 @@ class IterateArgs(BaseDataclass):
             raise ValueError("Replace_factor and replace_gap must be non-negative.")
 
         if self.replace_factor == 0 and self.replace_gap > 0:
-            raise ValueError("Replace-factor cannot be 0 if replace_gap is greater than 0.")
+            raise ValueError("Replace_factor cannot be 0 if replace_gap is greater than 0.")
 
         if self.threshold_window <= 0:
-            raise ValueError("Threshold window must be greater than 0.")
+            raise ValueError("Threshold_window must be greater than 0.")
 
         if int(self.threshold_window * self.sample_rate) > self.trace.shape[0]:
-            raise ValueError("Threshold window cannot be greater than the length of trace.")
+            raise ValueError("Threshold_window cannot be greater than the length of trace.")
 
         if self.z_score <= 0:
             raise ValueError("Z_score must be greater than 0.")
