@@ -370,6 +370,7 @@ class InitialEstimateArgs(BaseDataclass):
     cutoff: float
     replace_factor: float
     replace_gap: float
+    replace_extra: float
     threshold_window: float
     z_score: Optional[float]
     output_features: Optional[str]
@@ -426,8 +427,8 @@ class InitialEstimateArgs(BaseDataclass):
         if not (0 < self.cutoff <= self.sample_rate // 2):
             raise ValueError("Cutoff frequency must be between 0 and sample_rate // 2.")
 
-        if self.replace_gap < 0 or self.replace_factor < 0:
-            raise ValueError("Replace_factor and replace_gap must be non-negative.")
+        if self.replace_factor < 0 or self.replace_gap < 0 or self.replace_extra < 0:
+            raise ValueError("Replace_factor, replace_gap, and replace_extra must be non-negative.")
 
         if self.replace_factor == 0 and self.replace_gap > 0:
             raise ValueError("Replace_factor cannot be 0 if replace_gap is greater than 0.")
@@ -455,7 +456,8 @@ class InitialEstimateArgs(BaseDataclass):
 
         bl_args = {'cutoff': self.cutoff, 'sample_rate': self.sample_rate, 'z_score': self.z_score,
                    'threshold_window': int(self.threshold_window * self.sample_rate)}
-        lr_args = {'replace_factor': self.replace_factor, 'replace_gap': self.replace_gap}
+        lr_args = {'replace_factor': self.replace_factor, 'replace_gap': self.replace_gap,
+                   'replace_extra': self.replace_extra}
         gen_args = {'output_features': self.output_features, 'vector_results': self.vector_results,
                     'parallel': self.parallel, 'segment_size': self.segment_size}
 
@@ -475,6 +477,7 @@ class IterateArgs(BaseDataclass):
     sample_rate: Optional[int]
     replace_factor: float
     replace_gap: float
+    replace_extra: float
     threshold_window: float
     z_score: Optional[float]
     output_features: Optional[str]
@@ -534,8 +537,8 @@ class IterateArgs(BaseDataclass):
         if self.event_direction not in ['up', 'down', 'biphasic']:
             raise ValueError("Event_direction must be 'up', 'down', or 'biphasic'.")
 
-        if self.replace_gap < 0 or self.replace_factor < 0:
-            raise ValueError("Replace_factor and replace_gap must be non-negative.")
+        if self.replace_factor < 0 or self.replace_gap < 0 or self.replace_extra < 0:
+            raise ValueError("Replace_factor, replace_gap, and replace_extra must be non-negative.")
 
         if self.replace_factor == 0 and self.replace_gap > 0:
             raise ValueError("Replace_factor cannot be 0 if replace_gap is greater than 0.")
@@ -564,7 +567,7 @@ class IterateArgs(BaseDataclass):
         bl_args = {'cutoff': self.cutoff, 'sample_rate': self.sample_rate, 'z_score': self.z_score,
                    'threshold_window': int(self.threshold_window * self.sample_rate)}
         lr_args = {'event_direction': self.event_direction, 'replace_factor': self.replace_factor,
-                   'replace_gap': self.replace_gap}
+                   'replace_gap': self.replace_gap, 'replace_extra': self.replace_extra}
         gen_args = {'output_features': self.output_features, 'vector_results': self.vector_results,
                     'parallel': self.parallel, 'segment_size': self.segment_size}
 

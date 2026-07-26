@@ -7,11 +7,11 @@ data. WARNING: This module will be deprecated on conclusion of my PhD, it is a r
 a quick and easy way to produce testing data.
 """
 
-from typing import Optional
+from typing import Optional, Any
 from stochastic.processes.noise import FractionalGaussianNoise as Fgn
 from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
 from stochastic.processes.noise import VioletNoise as Vn, BlueNoise as Bn
-from numpy import mean, std, zeros, arange, sqrt, sum, ndarray, max
+from numpy import mean, std, zeros, arange, sqrt, sum, ndarray, max, asarray, maximum, argmax
 from numpy.random import default_rng
 from scipy.signal import get_window
 from copy import deepcopy
@@ -27,25 +27,34 @@ Public API
 def simulate_trace(
     length: int,
     sample_rate: int,
-    noise_dict: Optional[dict] = None,
-    baseline_dict: Optional[dict] = None,
-    event_dicts: Optional[list[dict]] = None,
-):
+    noise_dict: Optional[dict[str, Any]] = None,
+    baseline_dict: Optional[dict[str, Any]] = None,
+    event_dicts: Optional[list[dict[str, Any]]] = None,
+    wgn_base: bool = True,
+    original_bounds: bool = False,
+    random_state: Optional[int] = None
+) -> tuple[ndarray, ndarray, list[dict[str, Any]], ndarray]:
     """
     Simulate a trace with noise, baseline, and events.
 
     Args:
         length (int): The length of the trace.
         sample_rate (int): The sample rate of the trace.
-        noise_dict (dict, optional): Dictionary containing noise parameters with 'regimes' in the format
-        (alpha, crossover frequency) and 'sigma' specifying the overall sigma. See: simulate_regime(). Default is None.
-        baseline_dict (dict, optional): Dictionary containing baseline parameters. See: simulate_baseline().
-        Default is None.
-        event_dicts (list[dict], optional): List of dictionaries containing event parameters. See: simulate_events().
-        Default is None.
+        noise_dict (dict[str, Any] | None): Dictionary containing noise parameters with 'regimes' in the format
+            (alpha, crossover frequency) and 'sigma' specifying the overall sigma. See: simulate_regime().
+            Default is None.
+        baseline_dict (dict[str, Any] | None): Dictionary containing baseline parameters. See: simulate_baseline().
+            Default is None.
+        event_dicts (list[dict[str, Any]] | None): List of dictionaries containing event parameters. See: simulate_events().
+            Default is None.
+        wgn_base (bool): Whether to start the noise with a white Gaussian noise base for the noise_dict crossovers.
+            Default is True.
+        original_bounds (bool): Whether the event bounds are original or noise aware. Default is False.
+        random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
-        tuple: A tuple containing the trace, coordinate trace, events, and baseline.
+        tuple[ndarray, ndarray, list[dict[str, Any]], ndarray]: A tuple containing the trace, coordinate trace, events,
+            and baseline.
     """
 
     if noise_dict is None:
@@ -57,10 +66,21 @@ def simulate_trace(
         baseline_dict = {
             'voltage': 0,
         }
+    if event_dicts is None:
+        event_dicts = []
 
-    # Simulate wGn to start
-    noise = simulate_regime(0.5, 1, length)
+    # Random seeding
+    rng = default_rng(random_state)
+    def _next_seed() -> int:
+        return int(rng.integers(0, 2 ** 32 - 1))
+
+    # Simulate noise
+    noise = zeros(length)
     noise_power = 1 / (sample_rate / 2)
+
+    # Simulate wGn to start is requested
+    if wgn_base is True:
+        noise += simulate_regime(0.5, 1, length, _next_seed())
 
     # Now add the noise regimes
     for i, regime in enumerate(noise_dict['regimes']):
@@ -71,36 +91,21 @@ def simulate_trace(
         integral = lambda x: c * ((x ** (1 - gamma)) / (1 - gamma))
         regime_std = sqrt(integral(sample_rate / 2) - integral(sample_rate / length))
         # Sum the noise
-        noise += simulate_regime(regime[0], regime_std, length)
+        noise += simulate_regime(regime[0], regime_std, length, _next_seed())
 
     # Rescale to get the desired standard deviation
-    current_mean = mean(noise)
-    current_std = std(noise)
-    for i in range(length):
-        noise[i] += (noise_dict['sigma'] - current_std) * ((noise[i] - current_mean) / current_std)
+    noise -= mean(noise)
+    noise *= noise_dict['sigma'] / std(noise)
     trace = noise
 
-    # Add the events
+    # Create the events
     events = []
     for event_dict in event_dicts:
-        events.append(simulate_events(
-            event_dict['amplitude'],
-            event_dict['amplitude_std'],
-            event_dict['duration'],
-            event_dict['duration_std'],
-            event_dict['window'],
-            event_dict['direction'],
-            event_dict['event_number'],
-            sample_rate
-        ))
-
-    # Combine the events and reorder
+        events.append(simulate_events(**event_dict, sample_rate=sample_rate, random_state=_next_seed()))
     events = [event for sublist in events for event in sublist]
+
     # Add the events to the trace
-    trace, events, coordinate_trace = _add_events(trace, events, length, sample_rate)
-    # Reorder the events
-    events = sorted(events, key=lambda x: x['Coordinates'][0])
-    events = [{'ID': i + 1, **event} for i, event in enumerate(events)]
+    trace, events, coordinate_trace = _add_events(trace, events, length, sample_rate, original_bounds, _next_seed())
 
     # Add the baseline
     baseline = simulate_baseline(length, sample_rate, **baseline_dict)
@@ -109,7 +114,7 @@ def simulate_trace(
     return trace, coordinate_trace, events, baseline
 
 
-def simulate_regime(alpha: float, sigma: float, length: int):
+def simulate_regime(alpha: float, sigma: float, length: int, random_state: Optional[int] = None) -> ndarray:
     """
     Simulate a single noise regime.
 
@@ -117,33 +122,32 @@ def simulate_regime(alpha: float, sigma: float, length: int):
         alpha (float): The alpha parameter for the noise, alpha = -0.5 is the special capacitive noise case.
         sigma (float): The standard deviation of the noise.
         length (int): The length of the noise regime.
+        random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
         ndarray: The simulated noise regime.
     """
 
+    rng = default_rng(seed=random_state)
     if 1 < alpha <= 2:  # fBm
-        regime = Fbm(hurst=alpha - 1, t=length)
+        regime = Fbm(hurst=alpha - 1, t=length, rng=rng)
         regime = regime.sample(length)[1:]
     elif 0 < alpha <= 1:  # fGn
-        regime = Fgn(hurst=alpha, t=length)
+        regime = Fgn(hurst=alpha, t=length, rng=rng)
         regime = regime.sample(length)
     elif alpha == -0.5:  # Capacitive noise
-        regime = Vn(t=length)
+        regime = Vn(t=length, rng=rng)
         regime = regime.sample(length)[1:]
     elif alpha == 0: # Dielectric noise
-        regime = Bn(t=length)
+        regime = Bn(t=length, rng=rng)
         regime = regime.sample(length)[1:]
     else:
         raise ValueError("Alpha must be greater than 0 for fGn, greater than 1 for fBm, 0 for dielectric noise"
                          " or -0.5 for capacitive noise.")
 
     # Rescale to get the desired standard deviation
-    regime_mean = mean(regime)
-    regime_std = std(regime)
-    for i in range(len(regime)):
-        regime[i] += (sigma - regime_std) * ((regime[i] - regime_mean) / regime_std)
     regime -= mean(regime)
+    regime *= sigma / std(regime)
 
     return regime
 
@@ -155,7 +159,7 @@ def simulate_baseline(
     resistance: Optional[float] = None,
     change: Optional[float] = None,
     cottrell_numerator: Optional[float] = None,
-):
+) -> ndarray:
     """
     Simulate a baseline.
 
@@ -163,11 +167,11 @@ def simulate_baseline(
         length (int): The length of the baseline.
         sample_rate (int): The sample rate of the trace.
         voltage (float): The initial voltage offset of the baseline.
-        resistance (float, optional): The initial resistance.
-        change (float, optional): The change in the resistance over time.
-        cottrell_numerator (float, optional): The numerator of the Cottrell equation.
+        resistance (float | None): The initial resistance. Default is None.
+        change (float | None): The change in the resistance over time. Default is None.
+        cottrell_numerator (float | None): The numerator of the Cottrell equation. Default is None.
     Returns:
-        list: The simulated baseline.
+        ndarray: The simulated baseline.
     """
 
     time_vector = arange(1, length + 1) / sample_rate
@@ -180,7 +184,7 @@ def simulate_baseline(
     else:
         baseline = voltage / (resistance + (change * time_vector)) + cottrell_numerator / sqrt(time_vector)
 
-    return baseline
+    return asarray(baseline)
 
 
 def simulate_events(
@@ -192,8 +196,10 @@ def simulate_events(
     direction: str,
     event_number: int,
     sample_rate: int,
+    amplitude_min: float = 1e-12,
+    duration_min: int = 1,
     random_state: Optional[int] = None
-):
+) -> list[dict[str, Any]]:
     """
     Simulate events.
 
@@ -206,27 +212,33 @@ def simulate_events(
         direction (str): The direction of the events ('up' or 'down').
         event_number (int): The number of events to simulate.
         sample_rate (int): The sample rate of the trace.
+        amplitude_min (float): The minimum amplitude of the events. Default is 1e-12.
+        duration_min (int): The minimum duration of the events in samples. Default is 1.
         random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
-        list: A list of simulated event dictionaries.
+        list[dict[str, Any]]: A list of simulated event dictionaries.
     """
 
     if event_number == 0:
         return []
 
     rng = default_rng(seed=random_state)
-    # Calculate amplitudes of these events
-    amplitudes = abs(rng.normal(amplitude, amplitude_std, event_number))
-    # Calculate the durations of these events (convert from ms)
+
+    # Convert duration from ms
     event_duration_mean = int(duration / (1e3 / sample_rate))
     event_duration_std = int(duration_std / (1e3 / sample_rate))
+
+    # Sample amplitudes and durations from normal distributions, ensuring positive and clamped
+    amplitudes = abs(rng.normal(amplitude, amplitude_std, event_number))
+    amplitudes = maximum(amplitudes, amplitude_min)
     durations = abs(rng.normal(event_duration_mean, event_duration_std, event_number))
+    durations = maximum(durations.astype(int), duration_min)
 
     # Generate the events
     events = []
-    windows = ['boxcar', 'triang', 'blackman', 'hamming', 'hann', 'bartlett', 'flattop', 'parzen', 'bohman',
-               'blackmanharris', 'nuttall', 'barthann', 'cosine', 'tukey', 'taylor', 'lanczos']
+    windows = ['boxcar', 'triang', 'hamming', 'hann', 'bartlett', 'parzen', 'bohman', 'blackmanharris', 'nuttall',
+               'barthann', 'cosine', 'tukey', 'taylor', 'lanczos']
     for i in range(event_number):
         current_window = windows[rng.integers(0, len(windows))] if window == 'mixed' else window
         event_vector = get_window(current_window, int(durations[i]))
@@ -249,28 +261,40 @@ def simulate_events(
 Internal API
 """
 
-def _add_events(trace: list, events: list, length: int, sample_rate: int, random_state: Optional[int] = None):
+def _add_events(
+    trace: ndarray,
+    events: list[dict[str, Any]],
+    length: int,
+    sample_rate: int,
+    original_bounds: bool = False,
+    random_state: Optional[int] = None
+) -> tuple[ndarray, list[dict[str, Any]], ndarray]:
     """
     Add events to a trace and modify the event dictionaries accordingly.
 
     Args:
-        trace (list): The original trace to which events will be added.
-        events (list): A list of event dictionaries to add to the trace.
+        trace (ndarray): The original trace to which events will be added.
+        events (list[dict[str, Any]]): A list of event dictionaries to add to the trace.
         length (int): The length of the trace.
         sample_rate (int): The sample rate of the trace.
+        original_bounds (bool): Whether the event bounds are original or noise aware. Default is False.
         random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
-        tuple: A tuple containing the modified trace, event dictionaries and the coordinate trace.
+        tuple[ndarray, list[dict[str, Any]], ndarray]: A tuple containing the modified trace, event dictionaries and
+            the coordinate trace.
     """
 
     rng = default_rng(seed=random_state)
     coordinate_trace = zeros(length)
     i = 0
+    attempts = 0
+    max_attempts = 100
     while i < len(events):
+        attempts += 1
         event = events[i]
         # Get random coordinates
-        start_idx = rng.integers(0, length - len(event['Vector']))
+        start_idx = rng.integers(0, length - len(event['Vector']) + 1)
         end_idx = (start_idx + len(event['Vector'])) - 1
 
         # Save the old segment and add to the trace
@@ -279,34 +303,47 @@ def _add_events(trace: list, events: list, length: int, sample_rate: int, random
         trace[start_idx:end_idx + 1] += event['Vector']
 
         # Readjust coordinates for realism
-        start_idx += (end_idx - start_idx) // 2
-        end_idx = start_idx
-        if event['Direction'] == 'up':
-            while trace[start_idx] > 0 and start_idx > 0:
-                start_idx -= 1
+        if original_bounds is False:
+            start_idx += argmax(abs(event['Vector']))
+            end_idx = start_idx
+            if event['Direction'] == 'up':
+                while trace[start_idx] > 0 and start_idx > 0:
+                    start_idx -= 1
 
-            while trace[end_idx] > 0 and end_idx < length - 1:
-                end_idx += 1
-        else:
-            while trace[start_idx] < 0 and start_idx > 0:
-                start_idx -= 1
+                while trace[end_idx] > 0 and end_idx < length - 1:
+                    end_idx += 1
+            else:
+                while trace[start_idx] < 0 and start_idx > 0:
+                    start_idx -= 1
 
-            while trace[end_idx] < 0 and end_idx < length - 1:
-                end_idx += 1
+                while trace[end_idx] < 0 and end_idx < length - 1:
+                    end_idx += 1
 
         # Check if the coordinates are already occupied
-        if coordinate_trace[start_idx:end_idx + 1].any():
+        if coordinate_trace[start_idx:end_idx + 1].any() and attempts <= max_attempts:
             trace[idxs[0]:idxs[1] + 1] = segment
             continue
         else:
+            attempts = 0
             coordinate_trace[start_idx:end_idx + 1] = 1
 
-        # Modify the event dictionary (this is what the true event would be after adding to the trace)
+        # Original noise-free event information
+        event['Original Coordinates'] = [idxs[0], idxs[1]]
+        event['Original Vector'] = event['Vector']
+        event['Original Amplitude'] = event['Amplitude']
+        event['Original Duration'] = event['Duration']
+        event['Original Area'] = event['Area']
+
+        # Noise aware event information
         event['Coordinates'] = [start_idx, end_idx]
         event['Vector'] = trace[start_idx:end_idx + 1]
         event['Amplitude'] = max(abs(event['Vector']))
         event['Duration'] = len(event['Vector']) / sample_rate * 1e3
         event['Area'] = sum(abs(event['Vector'])) / sample_rate
         i += 1
+
+    # Reorder the events
+    events = sorted(events, key=lambda x: x['Coordinates'][0])
+    events = [{'ID': i + 1, **event} for i, event in enumerate(events)]
 
     return trace, events, coordinate_trace
