@@ -726,12 +726,13 @@ def _find_knee(x: ndarray, y: ndarray) -> int:
         int: The x value of the knee point.
     """
 
-    assert len(x) == len(y)
-    if len(x) < 2:
+    n = len(x)
+    assert n == len(y)
+    if n < 2:
         return int(x[0])
 
-    distances = abs((x[-1] - x[0]) * (y - y[0]) -
-                    (y[-1] - y[0]) * (x - x[0]))
+    distances = abs((x[n - 1] - x[0]) * (y - y[0]) -
+                    (y[n - 1] - y[0]) * (x - x[0]))
     return int(x[argmax(distances)])
 
 

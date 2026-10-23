@@ -6,7 +6,7 @@ This module provides functions to reconstruct and generate noise for (nano)elect
 """
 
 from typing import Optional, Any
-from numpy.random import default_rng
+from numpy.random import default_rng, Generator
 from tqdm import tqdm
 from numpy import unique, logspace, log, e, pi, abs, sum, clip, max, min, argmin, concatenate, linspace, ndarray, ceil, \
     log2, sqrt, cumsum, diff, mean, exp, inf, arccos, asarray, interp, full, r_
@@ -40,7 +40,7 @@ def reconstruct_noise(
     nfft: Optional[int] = None,
     generate: str | bool = 'best',
     complex_gen: bool = False,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False
 ) -> NoiseReconstructResults:
     """
@@ -72,7 +72,7 @@ def reconstruct_noise(
         nfft (int | None): The length of FFT to use for PSD calculation. Default is None.
         generate (str | bool): Whether to generate noise regimes. If 'Best', only the best fit is generated. Default is 'best'.
         complex_gen (bool): Whether to generate noise regimes starting with complex noise. Default is False.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
@@ -90,8 +90,9 @@ def reconstruct_noise(
     if len(trace) == 0:
         raise ValueError("The trace must not be empty.")
 
-    # Get args
+    # Get args and random state
     args = NoiseReconstructionArgs(**{k: v for k, v in locals().items() if k in NoiseReconstructionArgs.__annotations__})
+    random_state = default_rng(random_state)
 
     # Get the trace without the events
     removed_trace = trace[~event_mask]
@@ -150,7 +151,7 @@ def fit_noise(
     maxiter: tuple[int, int] = (2000, 10000),
     mutation: tuple[float, float] = (0.7, 1.2),
     popsize: Optional[int] = None,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False
 ) -> dict[int, NoiseFitResults]:
     """
@@ -168,12 +169,15 @@ def fit_noise(
         mutation (tuple[float, float]): The mutation constant for differential evolution. Default is (0.7, 1.2).
         popsize (int | None): The population size multiplier for differential evolution. If None, equates to number of
             parameters * 50. Default is None.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
         dict[int, NoiseFitResults]: A dictionary of noise fitting results keyed by the number of regimes.
     """
+
+    # Legacy random state (same seed for every n)
+    random_state = int(default_rng(random_state).integers(0, 2 ** 32))
 
     if len(f) != len(pxx):
         raise ValueError("Frequency and PSD arrays must have the same length.")
@@ -322,7 +326,7 @@ def generate_noise(
     nfft: Optional[int] = None,
     aa_cutoff: Optional[int] = None,
     aa_order: Optional[int] = None,
-    random_state: Optional[int] = None
+    random_state: Optional[int | Generator] = None,
 ) -> tuple[ndarray, dict[float, ndarray]]:
     """
     Generate a composition of noise regimes based on the provided alpha and c values using a modified version of the
@@ -339,12 +343,15 @@ def generate_noise(
         nfft (int | None): The number of PSD FFT points for scale matching. Default is None.
         aa_cutoff (int | None): The cutoff frequency for the anti-aliasing filter. Default is None.
         aa_order (int | None): The order of the anti-aliasing filter. Default is None.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
 
     Returns:
         tuple[ndarray, dict[float, ndarray]]: A tuple containing the total generated noise and a dictionary of individual
         noise regimes keyed by their alpha values.
     """
+
+    # Get random state
+    random_state = default_rng(random_state)
 
     if len(alphas) != len(cs):
         raise ValueError("The length of alphas and cs must be the same.")
@@ -360,7 +367,7 @@ def generate_noise(
             complex_gen=complex_gen,
             psd_period=psd_period,
             nfft=nfft,
-            random_state= random_state
+            random_state=random_state
         )
 
     # Sum the noises
@@ -443,7 +450,7 @@ def _generate_noises(
     aa_cutoff: Optional[int] = None,
     aa_order: Optional[int] = None,
     n_regimes: Optional[int | list[int]] = None,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False
 ) -> dict[int, NoiseFitResults]:
     """
@@ -460,12 +467,15 @@ def _generate_noises(
         aa_cutoff (int | None): The cutoff frequency for the anti-aliasing filter. Default is None.
         aa_order (int | None): The order of the anti-aliasing filter. Default is None.
         n_regimes (int | list[int] | None): Which keys to generate for. Default is None, which means all keys in noise_dict will be generated.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
         dict[int, NoiseFitResults]: The input dictionary with the requested noises generated.
     """
+
+    # Legacy random state (same seed for every n)
+    random_state = int(default_rng(random_state).integers(0, 2 ** 32))
 
     # If not specified, generate all regimes
     if n_regimes is None:
@@ -506,7 +516,7 @@ def _generate_regime(
     complex_gen: bool = False,
     psd_period: Optional[float] = None,
     nfft: Optional[int] = None,
-    random_state: Optional[int] = None
+    random_state: Optional[int | Generator] = None,
 ) -> ndarray:
     """
     Generate a single noise regime spanning from fractional Gaussian noise (fGn) to fractional Brownian motion (fBm) and
@@ -521,11 +531,14 @@ def _generate_regime(
         complex_gen (bool): Whether to generate starting with complex noise. Default is False.
         psd_period (float | None): The period of the power spectral density (PSD) for scale matching. Default is None.
         nfft (int | None): The number of PSD FFT points for scale matching. Default is None.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
 
     Returns:
         ndarray: The generated noise regime.
     """
+
+    # Get random state
+    random_state = default_rng(random_state)
 
     if length <= 0:
         raise ValueError("Length must be a positive integer.")
@@ -549,11 +562,10 @@ def _generate_regime(
     f = fftfreq(n, d=1.0 / sample_rate)
 
     # Start with complex white noise or transformed white noise
-    rng = default_rng(random_state)
     if complex_gen:
-        spectrum = rng.normal(loc=0, scale=1, size=n) + 1j * rng.normal(loc=0, scale=1, size=n)
+        spectrum = random_state.normal(loc=0, scale=1, size=n) + 1j * random_state.normal(loc=0, scale=1, size=n)
     else:
-        white_noise = rng.normal(scale=1, size=n)
+        white_noise = random_state.normal(scale=1, size=n)
         spectrum = fft(white_noise)
 
     # Spectral shape that fool

@@ -991,7 +991,7 @@ class NoiseReconstructionArgs(BaseDataclass):
     nfft: Optional[int]
     generate: str | bool
     complex_gen: bool
-    random_state: Optional[int]
+    random_state: Optional[int | Generator]
     verbose: bool
 
 

@@ -8,9 +8,7 @@ a quick and easy way to produce testing data.
 """
 
 from typing import Optional, Any
-from stochastic.processes.noise import FractionalGaussianNoise as Fgn
-from stochastic.processes.continuous.fractional_brownian_motion import FractionalBrownianMotion as Fbm
-from stochastic.processes.noise import VioletNoise as Vn, BlueNoise as Bn
+from notnormal.reconstruct.noise import _generate_regime
 from numpy import mean, std, zeros, arange, sqrt, sum, ndarray, max, asarray, maximum, argmax
 from numpy.random import default_rng
 from scipy.signal import get_window
@@ -80,7 +78,7 @@ def simulate_trace(
 
     # Simulate wGn to start is requested
     if wgn_base is True:
-        noise += simulate_regime(0.5, 1, length, _next_seed())
+        noise += simulate_regime(0.5, 1, length, sample_rate, _next_seed())
 
     # Now add the noise regimes
     for i, regime in enumerate(noise_dict['regimes']):
@@ -91,7 +89,7 @@ def simulate_trace(
         integral = lambda x: c * ((x ** (1 - gamma)) / (1 - gamma))
         regime_std = sqrt(integral(sample_rate / 2) - integral(sample_rate / length))
         # Sum the noise
-        noise += simulate_regime(regime[0], regime_std, length, _next_seed())
+        noise += simulate_regime(regime[0], regime_std, length, sample_rate, _next_seed())
 
     # Rescale to get the desired standard deviation
     noise -= mean(noise)
@@ -114,36 +112,29 @@ def simulate_trace(
     return trace, coordinate_trace, events, baseline
 
 
-def simulate_regime(alpha: float, sigma: float, length: int, random_state: Optional[int] = None) -> ndarray:
+def simulate_regime(
+    alpha: float,
+    sigma: float,
+    length: int,
+    sample_rate: int,
+    random_state: Optional[int] = None
+) -> ndarray:
     """
     Simulate a single noise regime.
 
     Args:
-        alpha (float): The alpha parameter for the noise, alpha = -0.5 is the special capacitive noise case.
+        alpha (float): The alpha parameter for the noise.
         sigma (float): The standard deviation of the noise.
         length (int): The length of the noise regime.
+        sample_rate (int): The sample rate of the trace.
         random_state (int | None): Seed for the random number generator for reproducibility. Default is None.
 
     Returns:
         ndarray: The simulated noise regime.
     """
 
-    rng = default_rng(seed=random_state)
-    if 1 < alpha <= 2:  # fBm
-        regime = Fbm(hurst=alpha - 1, t=length, rng=rng)
-        regime = regime.sample(length)[1:]
-    elif 0 < alpha <= 1:  # fGn
-        regime = Fgn(hurst=alpha, t=length, rng=rng)
-        regime = regime.sample(length)
-    elif alpha == -0.5:  # Capacitive noise
-        regime = Vn(t=length, rng=rng)
-        regime = regime.sample(length)[1:]
-    elif alpha == 0: # Dielectric noise
-        regime = Bn(t=length, rng=rng)
-        regime = regime.sample(length)[1:]
-    else:
-        raise ValueError("Alpha must be greater than 0 for fGn, greater than 1 for fBm, 0 for dielectric noise"
-                         " or -0.5 for capacitive noise.")
+    # Generate using the spectral method
+    regime = _generate_regime(alpha, 1.0, length, sample_rate, random_state=random_state)
 
     # Rescale to get the desired standard deviation
     regime -= mean(regime)

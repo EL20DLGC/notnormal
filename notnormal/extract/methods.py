@@ -590,12 +590,12 @@ def _reduce_parallel(items: list[tuple]) -> tuple[list[Iteration], ndarray]:
     # Now merge: arrays = concat; coords = concat (with offset); stats = recompute if fast else average
     iterations = []
     for i in range(n_iters):
-        items = [iters[i] for iters in chunk_iterations]
+        iteration_items = [iters[i] for iters in chunk_iterations]
         iteration = Iteration()
 
         # Reduce arrays
         for name in attr_names:
-            arrays = [getattr(item, name) for item in items]
+            arrays = [getattr(item, name) for item in iteration_items]
 
             # No arrays
             if all(a is None for a in arrays):
@@ -611,7 +611,7 @@ def _reduce_parallel(items: list[tuple]) -> tuple[list[Iteration], ndarray]:
 
             # Offset and concatenate event coordinates
             if name == 'event_coordinates':
-                coords_list = [item.event_coordinates + offset for item, offset in zip(items, offsets)
+                coords_list = [item.event_coordinates + offset for item, offset in zip(iteration_items, offsets)
                                if item.event_coordinates is not None and item.event_coordinates.size]
                 setattr(iteration, name, concatenate(coords_list) if coords_list else zeros((0, 2), dtype=int64))
                 continue
@@ -922,16 +922,17 @@ def _locate_events(
     baseline_idxs: cython.longlong[::1] = __find_crosses(greater_equal(adjusted_filtered, 0, out=mask), False)
 
     # Regular trace for threshold crossing indices
+    threshold_idxs: cython.longlong[::1]
     if event_direction == 'up':
         # Positive deflection
-        threshold_idxs: cython.longlong[::1] = __find_crosses(greater_equal(adjusted, threshold, out=mask))
+        threshold_idxs = __find_crosses(greater_equal(adjusted, threshold, out=mask))
     elif event_direction == 'down':
         # Negative deflection
-        threshold_idxs: cython.longlong[::1] = __find_crosses(less_equal(adjusted, -threshold, out=mask))
+        threshold_idxs = __find_crosses(less_equal(adjusted, -threshold, out=mask))
     else:
         # Biphasic deflection
-        threshold_idxs: cython.longlong[::1] = sort(concatenate((__find_crosses(greater_equal(adjusted, threshold,  out=mask)),
-                                                                 __find_crosses(less_equal(adjusted, -threshold, out=mask)))))
+        threshold_idxs = sort(concatenate((__find_crosses(greater_equal(adjusted, threshold,  out=mask)),
+                                           __find_crosses(less_equal(adjusted, -threshold, out=mask)))))
 
     if threshold_idxs.shape[0]  == 0:
         return zeros((0, 2), dtype=int64)
@@ -989,8 +990,9 @@ def _sort_coordinates(adjusted: ndarray, event_coordinates: cython.longlong[:, :
     """
 
     event_number: cython.Py_ssize_t = event_coordinates.shape[0]
+    sorted_coords: cython.longlong[:, ::1]
     if event_number == 0:
-        sorted_coords: cython.longlong[:, ::1] = zeros((0, 2), dtype=int64)
+        sorted_coords = zeros((0, 2), dtype=int64)
         return sorted_coords
 
     # Baseline adjust the trace
@@ -1014,7 +1016,7 @@ def _sort_coordinates(adjusted: ndarray, event_coordinates: cython.longlong[:, :
 
     # Sort the events by score (descending order)
     order = argsort(-asarray(scores), kind='stable')
-    sorted_coords: cython.longlong[:, ::1] = asarray(event_coordinates)[order]
+    sorted_coords = asarray(event_coordinates)[order]
 
     return sorted_coords
 
@@ -1051,8 +1053,9 @@ def _event_replacer(
 
     # Replacing with the baseline
     event_id: cython.Py_ssize_t = 0
+    padded_trace: cython.double[::1]
     if abs(replace_gap) < 1e-12 and abs(replace_factor) < 1e-12:
-        padded_trace: cython.double[::1] = trace.copy()
+        padded_trace = trace.copy()
         baseline_view: cython.double[::1] = baseline
         for event_id in range(event_number):
             padded_trace[event_coordinates[event_id, 0]:event_coordinates[event_id, 1] + 1] = (
@@ -1073,10 +1076,8 @@ def _event_replacer(
     else:
         tmp = pad(trace, trace.shape[0], mode="symmetric")
         padded_trace = pad(tmp, longest_window - trace.shape[0], mode="edge").astype(dtype, copy=False)
-    padded_trace: cython.double[::1] = padded_trace
 
     # We remove the events in order of largest to smallest (see: _sort_coordinates())
-    event_id: cython.Py_ssize_t = 0
     event_length: cython.Py_ssize_t
     event_start: cython.Py_ssize_t
     event_end: cython.Py_ssize_t
@@ -1356,8 +1357,9 @@ def __find_crosses(sign_mask: cython.uchar[::1], pair_match: cython.bint = True)
     """
 
     n: cython.Py_ssize_t = sign_mask.shape[0]
+    out: cython.longlong[::1]
     if n < 2:
-        out: cython.longlong[::1] = empty(0, dtype=int64)
+        out = empty(0, dtype=int64)
         return out
 
     # XOR successive bools without an intermediate allocation
@@ -1378,7 +1380,7 @@ def __find_crosses(sign_mask: cython.uchar[::1], pair_match: cython.bint = True)
         pre = 0
         post = 0
 
-    out: cython.longlong[::1] = empty(f_size + pre + post, dtype=int64)
+    out = empty(f_size + pre + post, dtype=int64)
     if pre:
         out[0] = 0
     if post:
