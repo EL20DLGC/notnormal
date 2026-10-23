@@ -9,11 +9,12 @@ reconstruction, clustering, and filtering.
 from __future__ import annotations
 from notnormal.models.supers import BaseDataclass
 from scipy.stats import norm
-from typing import Any, Optional, Callable
+from typing import Any, Optional, Callable, Iterable
 from dataclasses import dataclass, field
 from collections.abc import Iterator
 from warnings import warn
 from numpy import ndarray, arange, sum, asarray
+from numpy.random import Generator
 import cython
 
 _COMPILED = cython.compiled
@@ -748,14 +749,15 @@ class ShapeClusterArgs(BaseDataclass):
     """
 
     vectors: list[ndarray] | ndarray | Events = field(metadata={"serialise": False}, repr=False)
-    k: int | list[int]
+    k: int | Iterable[int]
     direction: Optional[str]
     n_components: int
     metric: str
     spread: float
     min_dist: float
     n_neighbors: int
-    random_state: Optional[int]
+    random_state: Optional[int | Generator]
+    scaling_feature_clustering: bool
     init_params: str
     max_iter: int
     n_init: int
@@ -777,9 +779,8 @@ class EventAugmentationArgs(BaseDataclass):
     n_vectors: Optional[int]
     max_k: int
     weight: float
-    random_state: Optional[int]
+    random_state: Optional[int | Generator]
     max_attempts: int
-    sample_global: bool
     dist_losses: bool
     verbose: bool
 
@@ -900,7 +901,7 @@ class ShapeClusters(BaseDataclass):
         """
 
         if cluster_id is None:
-            return [norm for cluster in self.clusters for norm in cluster.normalised if cluster.normalised is not None]
+            return [norm for cluster in self.clusters if cluster.normalised is not None for norm in cluster.normalised]
 
         return self.clusters[cluster_id].normalised if 0 <= cluster_id < len(self.clusters) else []
 
@@ -917,7 +918,7 @@ class ShapeClusters(BaseDataclass):
         """
 
         if cluster_id is None:
-            return [recon for cluster in self.clusters for recon in cluster.reconstructed if cluster.reconstructed is not None]
+            return [recon for cluster in self.clusters if cluster.reconstructed is not None for recon in cluster.reconstructed]
 
         return self.clusters[cluster_id].reconstructed if 0 <= cluster_id < len(self.clusters) else []
 
@@ -934,7 +935,7 @@ class ShapeClusters(BaseDataclass):
         """
 
         if cluster_id is None:
-            return [aug for cluster in self.clusters for aug in cluster.augmented if cluster.augmented is not None]
+            return [aug for cluster in self.clusters if cluster.augmented is not None for aug in cluster.augmented]
 
         return self.clusters[cluster_id].augmented if 0 <= cluster_id < len(self.clusters) else []
 

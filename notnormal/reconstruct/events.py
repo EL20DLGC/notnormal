@@ -6,15 +6,15 @@ This module provides functions to cluster, reconstruct, and augment events for (
 data.
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Iterable
 from warnings import catch_warnings
 from tqdm import tqdm
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from umap import UMAP
 from numpy.linalg import norm
-from numpy.random import default_rng
-from numpy import mean, zeros, sum, linspace, ndarray, max, average, maximum, corrcoef, pad, array, cross, vstack, std, \
-    argmax, correlate, log, exp, ceil, asarray, clip, int32
+from numpy.random import default_rng, RandomState, Generator
+from numpy import mean, zeros, sum, linspace, ndarray, max, average, maximum, corrcoef, pad, array, vstack, std, log, \
+    argmax, correlate, exp, ceil, asarray, clip, int32, column_stack, hstack
 from scipy.interpolate import CubicSpline
 from scipy.integrate import simpson
 from scipy.stats import wasserstein_distance
@@ -32,14 +32,15 @@ Public API
 
 def shape_cluster(
     vectors: Events | list[ndarray] | ndarray,
-    k: list[int] | int = tuple(range(2, 21)),
+    k: int | Iterable[int] = tuple(range(1, 21)),
     direction: Optional[str] = None,
     n_components: int = 10,
     metric: str = 'cosine',
     spread: float = 1.0,
     min_dist: float = 0.0,
     n_neighbors: int = 5,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
+    scaling_feature_clustering: bool = False,
     init_params: str = 'kmeans',
     max_iter: int = 100,
     n_init: int = 1,
@@ -60,18 +61,21 @@ def shape_cluster(
     shapes in the population.
 
     Args:
-        vectors (list[ndarray] | ndarray | Events): The event vectors to cluster. Should be 2D array-like or Events
+        vectors (Events | list[ndarray] | ndarray): The event vectors to cluster. Should be 2D array-like or Events
             object. If Events object, direction must be specified. Otherwise, vectors must be monophasic, but not
             required to be strictly one-sided.
-        k (int | list[int]): Number of clusters or list of cluster numbers. Default is range(2, 21).
-        direction (int | None): The direction of the events. Has to be provided if vectors is an Events object, otherwise
+        k (int | Iterable[int]): Number of clusters or iterable of cluster numbers. Default is range(1, 21).
+        direction (str | None): The direction of the events. Has to be provided if vectors is an Events object, otherwise
             ignored. Default is None.
         n_components (int): Number of latent space dimensions (UMAP). Default is 10.
         metric (str): Metric to compute distances (UMAP). Default is 'cosine'.
         spread (float): The effective scale of embedded points (UMAP). Default is 1.0.
         min_dist (float): The effective minimum distance between embedded points (UMAP). Default is 0.0.
         n_neighbors (int): Size of the local neighbourhood (UMAP). Default is 5.
-        random_state (int | None): Random seed for reproducibility (UMAP, GMM). Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility (UMAP, GMM). Default is None.
+        scaling_feature_clustering (bool): Whether to include scaling-features (area, duration) alongside the
+            transformation for clustering (GMM). This supports additional separation of shapes based on scale, and
+            therefore classification contexts. Default is False.
         init_params (str): The method used to initialise the weights (GMM). Default is 'kmeans'.
         max_iter (int): Number of EM iterations (GMM). Default is 100.
         n_init (int): Number of initialisations (GMM). Default is 1.
@@ -79,7 +83,8 @@ def shape_cluster(
         sigma (float): The noise standard deviation for interpretability and stability. Default is 0.0.
         align (bool): Whether to align the vectors before calculating losses. Default is True.
         dist_losses (bool): Whether to compute the reconstruction distributional losses. Default is True.
-        full_results (bool): Whether to return the globally normalised + transformed vectors in the results. Default is False.
+        full_results (bool): Whether to return the normalised vectors, transformed vectors, and reconstructed vectors
+            in the results. Default is False.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
@@ -91,8 +96,9 @@ def shape_cluster(
             raise ValueError("Direction must be specified if vectors is an Events object.")
         vectors = vectors.get_feature('Vector', filter_fn=lambda x: x['Direction'] == direction)
 
-    # Get args
+    # Get args and random state
     args = ShapeClusterArgs(**{k: v for k, v in locals().items() if k in ShapeClusterArgs.__annotations__})
+    random_state = default_rng(random_state)
 
     # Normalise events
     area_norm, length_norm = _normalise_events(vectors, verbose=verbose)
@@ -114,6 +120,7 @@ def shape_cluster(
         transform,
         vectors,
         k=k,
+        scaling_feature_clustering=scaling_feature_clustering,
         init_params=init_params,
         max_iter=max_iter,
         n_init=n_init,
@@ -128,6 +135,7 @@ def shape_cluster(
         sigma=sigma,
         align=align,
         dist_losses=dist_losses,
+        full_results=full_results,
         verbose=verbose
     )
 
@@ -150,9 +158,8 @@ def augment_clusters(
     n_vectors: Optional[int] = None,
     max_k: int = 50,
     weight: float = 1e-2,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     max_attempts: int = 100,
-    sample_global: bool = True,
     dist_losses: bool = True,
     verbose: bool = False,
 ) -> ShapeClusters:
@@ -166,10 +173,7 @@ def augment_clusters(
     provide a less accurate estimate under the sparser subset of events. By using density aware rejection sampling on
     both global and local models, scaling features can be sampled which respect both the overall and shape specific
     distribution of scales. In this way, augmented events can be generated which respect shape, the scales those shapes
-    are observed at, and the distribution of scales in the entire population. Note, the sample_global parameter controls
-    which model is sampled from, with samples being accepted if the log likelihood ratio between the not sampled and
-    sampled models exceeds a threshold. When True, the local model has a higher weighting, when False, the global
-    model has a higher weighting, see: _sample_log_method.
+    are observed at, and the distribution of scales in the entire population.
 
     Args:
         clusters (ShapeClusters): An object containing the clustering results.
@@ -177,9 +181,9 @@ def augment_clusters(
             ShapeClusters. Default is None.
         max_k (int): The maximum number of components to fit (scaling features). Default is 50.
         weight (float): The weight concentration prior for the Dirichlet Process (scaling features). Default is 1e-2.
-        random_state (int | None): Random seed for reproducibility (scaling features only). Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility (scaling features only).
+            Default is None.
         max_attempts (int): The maximum number of attempts to sample a candidate. Default is 100.
-        sample_global (bool): Whether to sample from the global model or the local model. Default is True.
         dist_losses (bool): Whether to compute the augmentation distributional losses. Default is True.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
@@ -187,8 +191,9 @@ def augment_clusters(
         ShapeClusters: The input clustering results with augmentation results added.
     """
 
-    # Get args
+    # Get args and random state
     clusters.aug_args = EventAugmentationArgs(**{k: v for k, v in locals().items() if k in EventAugmentationArgs.__annotations__})
+    random_state = default_rng(random_state)
 
     # Fit scaling features to the clusters
     clusters = _fit_scaling_features(clusters, max_k=max_k, weight=weight, random_state=random_state, verbose=verbose)
@@ -198,7 +203,6 @@ def augment_clusters(
         clusters,
         n_vectors=n_vectors,
         max_attempts=max_attempts,
-        sample_global=sample_global,
         random_state=random_state,
         verbose=verbose
     )
@@ -240,8 +244,8 @@ def _normalise_events(vectors: list[ndarray] | ndarray, clipped: bool = True, ve
     # Init normalisation params
     lengths = asarray([len(vector) for vector in vectors])
     max_len = max(lengths)
-    if any(length < 2 for length in lengths):
-        raise ValueError("Vectors must have at least 2 points for normalisation.")
+    if any(length <= 2 for length in lengths):
+        raise ValueError("Vectors must have at least 3 points for normalisation.")
 
     # Init normalisation matrices
     linspace_max = linspace(0, 1, max_len)
@@ -269,7 +273,7 @@ def _reduce_events(
     spread: float = 1.0,
     min_dist: float = 0.0,
     n_neighbors: int = 5,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False
 ) -> tuple[ndarray, UMAP]:
     """
@@ -282,12 +286,15 @@ def _reduce_events(
         spread (float): The effective scale of embedded points. Default is 1.0.
         min_dist (float): The effective minimum distance between embedded points. Default is 0.0.
         n_neighbors (int): Size of the local neighbourhood. Default is 5.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
         tuple[ndarray, UMAP]: A tuple containing the transformed event vectors and the UMAP object.
     """
+
+    # Legacy random state
+    random_state = RandomState(int(default_rng(random_state).integers(0, 2 ** 32)))
 
     if len(norm_vectors) == 0:
         raise ValueError("No vectors to reduce.")
@@ -314,12 +321,13 @@ def _reduce_events(
 
 def _cluster_latent(
     transform: ndarray,
-    vectors: list[ndarray],
-    k: int | list[int] = tuple(range(2, 21)),
+    vectors: list[ndarray] | ndarray,
+    k: int | Iterable[int] = tuple(range(1, 21)),
+    scaling_feature_clustering: bool = False,
     init_params: str = 'kmeans',
     max_iter: int = 100,
     n_init: int = 1,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False,
 ) -> dict[int, ShapeClusters]:
     """
@@ -327,17 +335,24 @@ def _cluster_latent(
 
     Args:
         transform (ndarray): The normalised and reduced event vectors to cluster. Should be 2D array-like.
-        vectors (list[ndarray]): The corresponding original event vectors (not normalised). Should be 2D array-like.
-        k (int | list[int]): Number of clusters or list of cluster numbers. Default is range(2, 21).
+        vectors (list[ndarray] | ndarray): The corresponding original event vectors (not normalised). Should be 2D
+            array-like.
+        k (int | Iterable[int]): Number of clusters or iterable of cluster numbers. Default is range(1, 21).
+        scaling_feature_clustering (bool): Whether to include scaling-features (area, duration) alongside the
+            transformation for clustering. This supports additional separation of shapes based on scale, and therefore
+            classification contexts. Default is False.
         init_params (str): The method used to initialise the weights. Default is 'kmeans'.
         max_iter (int): Number of EM iterations. Default is 100.
         n_init (int): Number of initialisations. Default is 1.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
         dict[int, ShapeClusters]: A dictionary of clustering results keyed by the number of clusters.
     """
+
+    # Legacy random state (same seed for every k, independent generators)
+    random_state = int(default_rng(random_state).integers(0, 2 ** 32))
 
     if len(transform) < 2 or len(vectors) < 2:
         raise ValueError("At least two vectors are required for clustering.")
@@ -345,16 +360,25 @@ def _cluster_latent(
         raise ValueError("Transformed vectors and original vectors must have the same length.")
 
     k_list = [k] if isinstance(k, int) else list(k)
-    if any(k < 2 for k in k_list):
-        raise ValueError("Number of clusters 'k' must be at least 2.")
+    if not k_list or any(k < 1 or k > len(vectors) for k in k_list):
+        raise ValueError("Number of clusters 'k' must be between 1 and the number of events.")
+
+    # Include scaling features
+    if scaling_feature_clustering:
+        scale = column_stack((
+            log([abs(simpson(vector)) for vector in vectors]),
+            log([len(vector) for vector in vectors])
+        ))
+        scale = (scale - mean(scale, axis=0)) / std(scale, axis=0)
+        transform = hstack((transform, scale))
 
     # Configure progress bar
     with tqdm(total=len(k_list), desc='Clustering', bar_format=_BAR_FORMAT, disable=not verbose) as progress:
         results = {}
         for k in k_list:
             # Init GMM params
-            gmm = GaussianMixture(n_components=k, random_state=random_state, init_params=init_params, max_iter=max_iter,
-                                  n_init=n_init)
+            gmm = GaussianMixture(n_components=k, init_params=init_params, max_iter=max_iter, n_init=n_init,
+                                  random_state=RandomState(random_state))
 
             # Fit GMM
             labels = gmm.fit_predict(transform)
@@ -389,6 +413,7 @@ def _representative_vectors(
     sigma: float = 0.0,
     align: bool = True,
     dist_losses: bool = True,
+    full_results: bool = False,
     verbose: bool = False
 ) -> dict[int, ShapeClusters]:
     """
@@ -401,6 +426,8 @@ def _representative_vectors(
         sigma (float): The noise standard deviation for interpretability and stability. Default is 0.0.
         align (bool): Whether to align the vectors before calculating losses. Default is True.
         dist_losses (bool): Whether to compute the reconstruction distributional losses. Default is True.
+        full_results (bool): Whether to return the cluster-specific normalised and reconstructed vectors in the results.
+            Default is False.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
@@ -430,6 +457,13 @@ def _representative_vectors(
                 clusters.mean_loss = _aggregate_losses(clusters)
                 if dist_losses:
                     clusters.distributional_loss = _distributional_loss(clusters, recon=True)
+
+            # Discard intermediate vectors
+            if not full_results:
+                for cluster in clusters.clusters:
+                    cluster.normalised = None
+                    cluster.reconstructed = None
+
 
     return clusters_dict
 
@@ -680,7 +714,7 @@ def _get_knees(clusters_dict: dict[int, ShapeClusters]) -> tuple[ShapeClusters, 
     return clusters_dict[best_k], loss_curves, knees
 
 
-def _find_knee(x: ndarray, y: ndarray) -> ndarray:
+def _find_knee(x: ndarray, y: ndarray) -> int:
     """
     Find the geometric knee between x and y.
 
@@ -689,23 +723,23 @@ def _find_knee(x: ndarray, y: ndarray) -> ndarray:
         y (ndarray): The array of corresponding y values.
 
     Returns:
-        ndarray: The x value of the knee point.
+        int: The x value of the knee point.
     """
 
     assert len(x) == len(y)
     if len(x) < 2:
-        return x[0]
+        return int(x[0])
 
-    p1, p2 = array([x[0], y[0]]), array([x[len(x) - 1], y[len(y) - 1]])
-    distances = abs(cross(p2 - p1, p1 - vstack((x, y)).T)) / norm(p2 - p1)
-    return x[argmax(distances)]
+    distances = abs((x[-1] - x[0]) * (y - y[0]) -
+                    (y[-1] - y[0]) * (x - x[0]))
+    return int(x[argmax(distances)])
 
 
 def _fit_scaling_features(
     clusters: ShapeClusters,
     max_k: int = 50,
     weight: float = 1e-2,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False
 ) -> ShapeClusters:
     """
@@ -715,12 +749,15 @@ def _fit_scaling_features(
         clusters (ShapeClusters): An object containing the clustering results.
         max_k (int): The maximum number of components to fit. Default is 50.
         weight (float): The weight concentration prior for the Dirichlet Process. Default is 1e-2.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
         ShapeClusters: The input clustering results with models added.
     """
+
+    # Get random state
+    random_state = default_rng(random_state)
 
     all_durations = []
     all_areas = []
@@ -754,7 +791,7 @@ def _fit_dp_gmm(
     areas: ndarray,
     max_k: int = 50,
     weight: float = 1e-2,
-    random_state: Optional[int] = None
+    random_state: Optional[int | Generator] = None,
 ) -> BayesianGaussianMixture:
     """
     Fit a Dirichlet Process Gaussian Mixture Model to the given log transformed durations and areas.
@@ -763,12 +800,15 @@ def _fit_dp_gmm(
         durations (ndarray): The log transformed durations of the event vectors (samples).
         areas (ndarray): The log transformed areas of the event vectors (integral).
         max_k (int): The maximum number of components to fit. Default is 50.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         weight (float): The weight concentration prior for the Dirichlet Process. Default is 1e-2.
 
     Returns:
         BayesianGaussianMixture: The fitted Dirichlet Process Gaussian Mixture Model.
     """
+
+    # Legacy random state
+    random_state = RandomState(int(default_rng(random_state).integers(0, 2 ** 32)))
 
     if len(durations) == 0 or len(areas) == 0:
         raise ValueError("Durations and areas must not be empty.")
@@ -795,8 +835,7 @@ def _augment_vectors(
     clusters: ShapeClusters,
     n_vectors: Optional[int] = None,
     max_attempts: int = 100,
-    sample_global: bool = True,
-    random_state: Optional[int] = None,
+    random_state: Optional[int | Generator] = None,
     verbose: bool = False
 ) -> ShapeClusters:
     """
@@ -807,13 +846,15 @@ def _augment_vectors(
         n_vectors (int | None): The number of vectors to generate. If None, one generation will occur per event in
             ShapeClusters. Default is None.
         max_attempts (int): The maximum number of attempts to sample a candidate. Default is 100.
-        sample_global (bool): Whether to sample from the global model or the local model. Default is True.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed or generator for reproducibility. Default is None.
         verbose (bool): Whether to print verbose output during processing. Default is False.
 
     Returns:
         ShapeClusters: The input clustering results with augmentation results added.
     """
+
+    # Get random state
+    random_state = default_rng(random_state)
 
     if clusters.clusters[0].representative is None:
         raise ValueError("ShapeClusters must contain 'representative' vector, see: _representative_vectors.")
@@ -822,6 +863,8 @@ def _augment_vectors(
     if n_vectors is None:
         n_vectors = int(sum([len(cluster.vectors) for cluster in clusters.clusters]))
 
+    # Supply augmentation controlled legacy random state
+    clusters.model.random_state = RandomState(int(random_state.integers(0, 2 ** 32)))
     # Sample the model to get the associated representative vectors
     clusters.sampled_model, clusters.sampled_labels = clusters.model.sample(n_vectors)
 
@@ -840,7 +883,6 @@ def _augment_vectors(
                 clusters.clusters[label].local_model,
                 clusters.global_model,
                 max_attempts=max_attempts,
-                sample_global=sample_global,
                 random_state=random_state
             )
 
@@ -867,37 +909,37 @@ def _sample_log_method(
     local_model: BayesianGaussianMixture,
     global_model: BayesianGaussianMixture,
     max_attempts: int = 100,
-    sample_global: bool = True,
-    random_state: Optional[int] = None
+    random_state: Optional[int | Generator] = None,
 ) -> ndarray:
     """
-    Sample a log duration and log area candidate from the local or global model using the log method, similar to
-    Metropolis-Hastings rejection sampling, where the candidate is accepted if the log likelihood ratio between
-    the not sampled and sampled models exceeds the log of a random number between 0 and 1.
+    Sample a log duration and log area candidate from the global model using the log method, where the candidate is
+    accepted if the log likelihood ratio between the local and global models exceeds the log of a random number
+    between 0 and 1.
 
     Args:
-        local_model (BayesianGaussianMixture): The local model to sample from.
+        local_model (BayesianGaussianMixture): The local model to evaluate candidates.
         global_model (BayesianGaussianMixture): The global model to sample from.
         max_attempts (int): The maximum number of attempts to sample a candidate. Default is 100.
-        sample_global (bool): Whether to sample from the global model or the local model. Default is True.
-        random_state (int | None): Random seed for reproducibility. Default is None.
+        random_state (int | Generator | None): Random seed for reproducibility. Default is None.
 
     Returns:
         ndarray: A sampled candidate (log duration and log area).
     """
 
-    rng = default_rng(seed=random_state)
+    # Get random state
+    random_state = default_rng(random_state)
+
     attempts = 0
     while attempts < max_attempts:
-        # Sample a candidate from the local or global model
-        candidate = global_model.sample(1)[0] if sample_global else local_model.sample(1)[0]
+        # Sample a candidate from the global model
+        candidate = global_model.sample(1)[0]
         local_likelihood = local_model.score(candidate)
         global_likelihood = global_model.score(candidate)
         candidate = candidate[0]
 
         # Calculate the log likelihood ratio
-        log_ratio = local_likelihood - global_likelihood if sample_global else global_likelihood - local_likelihood
-        if log_ratio > log(rng.random()):
+        log_ratio = local_likelihood - global_likelihood
+        if log_ratio > log(random_state.random()):
             return candidate
         attempts += 1
 

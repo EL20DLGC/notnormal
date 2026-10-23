@@ -162,9 +162,6 @@ def get_event_mask(trace: ndarray | Trace, coordinates: list[tuple[int, int]] | 
         ndarray: Boolean or float event mask.
     """
 
-    if isinstance(trace, Trace) and isinstance(coordinates, Events) and trace.label != coordinates.label:
-        warn(f"Trace label '{trace.label}' does not match Events label '{coordinates.label}'.")
-
     if isinstance(trace, Trace):
         trace = trace.trace
 
